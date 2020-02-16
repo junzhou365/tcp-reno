@@ -1,0 +1,5 @@
+*.o
+*.pcap
+client
+server
+tags
