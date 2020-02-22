@@ -92,6 +92,11 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   getsockname(sockfd, (struct sockaddr *) &my_addr, &len);
   dst->my_port = ntohs(my_addr.sin_port);
 
+  if (establish_conn(dst, flag == TCP_INITATOR) < 0) {
+      perror("ERROR on establishing conn");
+      return EXIT_ERROR;
+  }
+
   pthread_create(&(dst->thread_id), NULL, begin_backend, (void *)dst);  
   return EXIT_SUCCESS;
 }

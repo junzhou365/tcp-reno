@@ -7,5 +7,6 @@
 int check_ack(cmu_socket_t * dst, uint32_t seq);
 void check_for_data(cmu_socket_t * dst, int flags);
 void * begin_backend(void * in);
+int establish_conn(cmu_socket_t *dst, int init);
 
 #endif
