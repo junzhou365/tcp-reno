@@ -34,10 +34,32 @@ void handle_message(cmu_socket_t * sock, char* pkt){
   uint32_t data_len, seq;
   socklen_t conn_len = sizeof(sock->conn);
   switch(flags){
+    case SYN_FLAG_MASK:
+        seq = get_seq(pkt);
+        rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*new seq*/, seq + 1 /*ack*/,
+          DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK|ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+        sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+          &(sock->conn), conn_len);
+        free(rsp);
+
+        break;
+
+    case SYN_FLAG_MASK | ACK_FLAG_MASK:
+        seq = get_seq(pkt);
+        sock->window.last_ack_received = get_ack(pkt);
+        rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, seq + 1 /*ack*/,
+          DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+        sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+          &(sock->conn), conn_len);
+        free(rsp);
+
+        break;
+
     case ACK_FLAG_MASK:
       if(get_ack(pkt) > sock->window.last_ack_received)
         sock->window.last_ack_received = get_ack(pkt);
       break;
+
     default:
       seq = get_seq(pkt);
       rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, seq+1, 
@@ -219,57 +241,20 @@ void* begin_backend(void * in){
   return NULL; 
 }
 
-int establish_conn(cmu_socket_t *dst, int init) {
+int establish_conn(cmu_socket_t *dst) {
     /*while(pthread_mutex_lock(&(dst->send_lock)) != 0);*/
     /*pthread_mutex_unlock(&(dst->send_lock));*/
-    char hdr[DEFAULT_HEADER_LEN];
-    socklen_t conn_len = sizeof(dst->conn);
     cmu_socket_t *sock = dst;
+    socklen_t conn_len = sizeof(sock->conn);
 
-    if (init) {
-
+    while (TRUE) {
         char *syn = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, 0 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK, 1, 0, NULL, NULL, 0);
         sendto(sock->socket, syn, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(sock->conn), conn_len);
-
-        recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, NO_FLAG,
-                (struct sockaddr *) &(sock->conn), &conn_len);
-
-        if (get_ack(hdr) == 1 && get_seq(hdr) == 0 && get_flags(hdr) == (SYN_FLAG_MASK | ACK_FLAG_MASK)) {
-
-            sock->window.last_ack_received = get_ack(hdr);
-
-            char *ack = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, 1 /*ack*/,
-              DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-            sendto(sock->socket, ack, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-              &(sock->conn), conn_len);
-        } else {
-            // TODO: error code
-            return -1;
-        }
-
-    } else {
-
-        recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, NO_FLAG,
-                (struct sockaddr *) &(sock->conn), &conn_len);
-
-        if (get_seq(hdr) == 0 && get_flags(hdr) == SYN_FLAG_MASK)  {
-
-            char *syn_ack = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, 1 /*ack*/,
-              DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK|ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-            sendto(sock->socket, syn_ack, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-              &(sock->conn), conn_len);
-
-            memset(hdr, 0, DEFAULT_HEADER_LEN);
-            recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, NO_FLAG,
-                    (struct sockaddr *) &(sock->conn), &conn_len);
-
-            sock->window.last_ack_received = get_ack(hdr);
-        } else {
-            // TODO: better handling
-            return -1;
-        }
+        check_for_data(dst, TIMEOUT);
+        if (check_ack(sock, 0))
+            break;
     }
 
     return 0;
