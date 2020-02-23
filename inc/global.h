@@ -40,6 +40,7 @@ typedef struct {
 	int type;
 	pthread_mutex_t send_lock;
 	int dying;
+    int remote_closed;
 	pthread_mutex_t death_lock;
 	window_t window;
 } cmu_socket_t;

@@ -116,6 +116,10 @@ int cmu_close(cmu_socket_t * sock){
 
   pthread_join(sock->thread_id, NULL); 
 
+  int ret = close_conn(sock);
+  if (ret < 0)
+      perror("ERROR close conn\n");
+
   if(sock != NULL){
     if(sock->received_buf != NULL)
       free(sock->received_buf);

@@ -1,4 +1,9 @@
 #include "backend.h"
+#include <unistd.h>
+#include <stdio.h>
+
+void send_empty_pkt(
+    cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack);
 
 /*
  * Param: sock - The socket to check for acknowledgements. 
@@ -33,6 +38,14 @@ void handle_message(cmu_socket_t * sock, char* pkt){
   uint8_t flags = get_flags(pkt);
   uint32_t data_len, seq;
   socklen_t conn_len = sizeof(sock->conn);
+
+  // TODO: piggyback ACK
+  /*int death;*/
+  /*while(pthread_mutex_lock(&(sock->death_lock)) !=  0);*/
+  /*death = sock->dying;*/
+  /*pthread_mutex_unlock(&(sock->death_lock));*/
+
+
   switch(flags){
     case SYN_FLAG_MASK:
         seq = get_seq(pkt);
@@ -53,6 +66,37 @@ void handle_message(cmu_socket_t * sock, char* pkt){
           &(sock->conn), conn_len);
         free(rsp);
 
+        break;
+
+    case FIN_FLAG_MASK:
+        while(pthread_mutex_lock(&(sock->death_lock)) != 0);
+        sock->remote_closed = TRUE;
+        pthread_mutex_unlock(&(sock->death_lock));
+
+        uint8_t send_flag = ACK_FLAG_MASK;
+        uint8_t ack = get_seq(pkt) + 1;
+        seq = 0;
+        // TODO: piggyback ACK
+        //if (death) {
+        //    // we could piggyback the ack onto the FIN
+        //    send_flag |= FIN_FLAG_MASK;
+        //    seq = sock->window.last_ack_received;
+        //}
+
+        send_empty_pkt(sock, send_flag, seq, ack);
+
+        break;
+
+    case FIN_FLAG_MASK | ACK_FLAG_MASK:
+        while(pthread_mutex_lock(&(sock->death_lock)) != 0);
+        sock->remote_closed = TRUE;
+        pthread_mutex_unlock(&(sock->death_lock));
+
+        if(get_ack(pkt) > sock->window.last_ack_received)
+            sock->window.last_ack_received = get_ack(pkt);
+
+        seq = get_seq(pkt);
+        send_empty_pkt(sock, ACK_FLAG_MASK, 0, seq+1);
         break;
 
     case ACK_FLAG_MASK:
@@ -206,8 +250,10 @@ void* begin_backend(void * in){
     while(pthread_mutex_lock(&(dst->send_lock)) != 0);
     buf_len = dst->sending_len;
 
-    if(death && buf_len == 0)
+    if(death && buf_len == 0) {
+      pthread_mutex_unlock(&(dst->send_lock));
       break;
+    }
 
     if(buf_len > 0){
       data = malloc(buf_len);
@@ -241,21 +287,83 @@ void* begin_backend(void * in){
   return NULL; 
 }
 
-int establish_conn(cmu_socket_t *dst) {
-    /*while(pthread_mutex_lock(&(dst->send_lock)) != 0);*/
-    /*pthread_mutex_unlock(&(dst->send_lock));*/
-    cmu_socket_t *sock = dst;
+void send_empty_pkt(
+    cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack) {
+
     socklen_t conn_len = sizeof(sock->conn);
+    char *pkt = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
+      DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, flag, 1, 0, NULL, NULL, 0);
+    sendto(sock->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+      &(sock->conn), conn_len);
+    free(pkt);
+}
+
+int establish_conn(cmu_socket_t *dst) {
+    cmu_socket_t *sock = dst;
 
     while (TRUE) {
-        char *syn = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, 0 /*ack*/,
-          DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK, 1, 0, NULL, NULL, 0);
-        sendto(sock->socket, syn, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-          &(sock->conn), conn_len);
+        send_empty_pkt(sock, SYN_FLAG_MASK, 0, 0);
         check_for_data(dst, TIMEOUT);
         if (check_ack(sock, 0))
             break;
     }
 
     return 0;
+}
+
+int get_remote_closed(cmu_socket_t *sock) {
+    int remote_closed;
+
+    while(pthread_mutex_lock(&(sock->death_lock)) != 0);
+    remote_closed = sock->remote_closed;
+    pthread_mutex_unlock(&(sock->death_lock));
+
+    return remote_closed;
+}
+
+int close_conn(cmu_socket_t *dst) {
+
+    uint32_t seq;
+    int remote_closed = get_remote_closed(dst);
+
+    printf("debug: remote_closed: %d\n", remote_closed);
+
+    while(pthread_mutex_lock(&(dst->send_lock)) != 0);
+    seq = dst->window.last_ack_received;
+    printf("debug: seq: %d\n", seq);
+    pthread_mutex_unlock(&(dst->send_lock));
+
+    // LAST_ACK
+    if (remote_closed) {
+        send_empty_pkt(dst, FIN_FLAG_MASK, seq, 0);
+        check_for_data(dst, TIMEOUT);
+        if (check_ack(dst, seq))
+            return EXIT_SUCCESS;
+
+        // the connection is aborted
+        return EXIT_FAILURE;
+    }
+
+    int fin_acked = FALSE;
+
+    // FIN_WAIT_1 + FIN_WAIT_2
+    while (!remote_closed) {
+
+        printf("debug: fin_acked: %d\n", fin_acked);
+
+        // TODO: retransmit
+        if (!fin_acked)
+            send_empty_pkt(dst, FIN_FLAG_MASK, seq, 0);
+
+        check_for_data(dst, TIMEOUT);
+
+        remote_closed = get_remote_closed(dst);
+        fin_acked = check_ack(dst, seq);
+        if (fin_acked && remote_closed)
+            break;
+    }
+
+    // 120 is too long in the test
+    sleep(10);
+    return EXIT_SUCCESS;
 }
