@@ -35,3 +35,8 @@ testing_server: $(OBJS)
 
 clean:
 	-rm -f $(BUILD_DIR)/*.o client server testing_server $(TEST_DIR)/file.c $(TEST_DIR)/random.input
+
+ringbuffer-test:
+	$(CC) $(FLAGS) -c $(SRC_DIR)/ringbuffer.c -o $(BUILD_DIR)/ringbuffer.o
+	$(CC) $(FLAGS) $(SRC_DIR)/ringbuffer_test.c -o $(BUILD_DIR)/ringbuffer_test  $(BUILD_DIR)/ringbuffer.o
+	$(BUILD_DIR)/ringbuffer_test
