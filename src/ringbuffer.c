@@ -25,8 +25,8 @@ int ringbuffer_len(ringbuffer *rb) {
 }
 
 int ringbuffer_push(ringbuffer *rb, char *data, int len) {
-    if (rb->len == rb->cap)
-        return ERR_RINGBUFFER_FULL;
+    if (len > (rb->cap - rb->len))
+        return ERR_RINGBUFFER_NO_ENOUGH_SPACE;
 
     for (int i = 0; i < len; i++) {
         rb->data[rb->end] = data[i];
@@ -49,5 +49,27 @@ int ringbuffer_pop(ringbuffer *rb, char **data_out, int len) {
     }
 
     rb->len -= len;
+    return 0;
+}
+
+int ringbuffer_insert(ringbuffer *rb, int offset, char *data, int len) {
+    if ((offset + len) > (rb->cap - rb->len))
+        return ERR_RINGBUFFER_NO_ENOUGH_SPACE;
+
+    int next = (rb->end + offset) % rb->cap;
+    for (int i = 0; i < len; i++) {
+        rb->data[next] = data[i];
+        next = (next + 1) % rb->cap;
+    }
+
+    return 0;
+}
+
+int ringbuffer_move_end(ringbuffer *rb, int len) {
+    if (len > (rb->cap - rb->len))
+        return ERR_RINGBUFFER_NO_ENOUGH_SPACE;
+
+    rb->end = (rb->end + len) % rb->cap;
+    rb->len += len;
     return 0;
 }

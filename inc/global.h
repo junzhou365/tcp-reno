@@ -2,6 +2,8 @@
 #ifndef _GLOBAL_H_
 #define _GLOBAL_H_
 
+#include "window.h"
+
 #define EXIT_SUCCESS 0
 #define EXIT_ERROR -1
 #define EXIT_FAILURE 1
@@ -16,13 +18,6 @@
 
 #define TRUE 1
 #define FALSE 0
-
-
-typedef struct {
-	uint32_t last_seq_received;
-	uint32_t last_ack_received;
-	pthread_mutex_t ack_lock;
-} window_t;
 
 
 typedef struct {
