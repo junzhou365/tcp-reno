@@ -5,7 +5,7 @@
 
 typedef struct {
     int cap;
-    cmu_packet_t **packets;
+    char *data;
 
     int len;
     int start;
@@ -17,8 +17,8 @@ void ringbuffer_free(ringbuffer *rb);
 
 int ringbuffer_cap(ringbuffer *rb);
 int ringbuffer_len(ringbuffer *rb);
-int ringbuffer_push(ringbuffer *rb, cmu_packet_t *pkt);
-int ringbuffer_pop(ringbuffer *rb, cmu_packet_t **store);
+int ringbuffer_push(ringbuffer *rb, char *data, int len);
+int ringbuffer_pop(ringbuffer *rb, char **data_out, int len);
 
 #define ERR_RINGBUFFER_FULL 1
 #define ERR_RINGBUFFER_EMPTY 2

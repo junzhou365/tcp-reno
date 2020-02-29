@@ -12,48 +12,46 @@ int test_new_ringbuffer() {
     return 0;
 }
 
-int test_ringbuffer_pus_pop() {
+int test_ringbuffer_push_pop() {
     ringbuffer *rb = new_ringbuffer(2);
 
-    cmu_packet_t pkt1 = {};
-    pkt1.header.identifier = 1;
-    cmu_packet_t pkt2 = {};
-    pkt2.header.identifier = 2;
-    cmu_packet_t pkt3 = {};
-    pkt3.header.identifier = 3;
+    char d1[1] = {0};
+    char d2[1] = {1};
+    char d3[1] = {2};
 
     int ret;
 
-    ret = ringbuffer_push(rb, &pkt1);
+    ret = ringbuffer_push(rb, d1, 1);
     assert(ret == 0);
     assert(ringbuffer_len(rb) == 1);
 
-    ret = ringbuffer_push(rb, &pkt2);
+    ret = ringbuffer_push(rb, d2, 1);
     assert(ret == 0);
     assert(ringbuffer_len(rb) == 2);
 
-    cmu_packet_t *pkt;
+    char *data = malloc(1);
     
-    ret = ringbuffer_pop(rb, &pkt);
+    ret = ringbuffer_pop(rb, &data, 1);
     assert(ret == 0);
-    assert(pkt->header.identifier == 1);
+    assert(data[0] == 0);
 
 
-    ret = ringbuffer_push(rb, &pkt3);
+    ret = ringbuffer_push(rb, d3, 1);
     assert(ret == 0);
     assert(ringbuffer_len(rb) == 2);
 
-    ret = ringbuffer_pop(rb, &pkt);
+    ret = ringbuffer_pop(rb, &data, 1);
     assert(ret == 0);
-    assert(pkt->header.identifier == 2);
+    assert(data[0] == 1);
     assert(ringbuffer_len(rb) == 1);
 
-    ret = ringbuffer_pop(rb, &pkt);
+    ret = ringbuffer_pop(rb, &data, 1);
     assert(ret == 0);
-    assert(pkt->header.identifier == 3);
+    assert(data[0] == 2);
     assert(ringbuffer_len(rb) == 0);
 
     ringbuffer_free(rb);
+    free(data);
     return 0;
 }
 
@@ -64,7 +62,7 @@ int main() {
     if (ret == 0)
         printf("new rb succeed!!\n");
 
-    ret = test_ringbuffer_pus_pop();
+    ret = test_ringbuffer_push_pop();
     if (ret == 0)
         printf("push pop succeed!!\n");
     return 0;
