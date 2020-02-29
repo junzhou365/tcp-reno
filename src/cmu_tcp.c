@@ -35,9 +35,14 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->type = flag;
   dst->dying = FALSE;
   pthread_mutex_init(&(dst->death_lock), NULL);
-  dst->window.last_ack_received = 0;
-  dst->window.last_seq_received = 0;
-  pthread_mutex_init(&(dst->window.ack_lock), NULL);
+
+  dst->send_window.cur_seq = 0;
+  dst->send_window.last_ack_received = 0;
+  dst->send_window.last_win_received = 0;
+  pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
+
+  dst->recv_window.last_seq_received = 0;
+  dst->recv_window.rcvq = new_ringbuffer(10 << 10);
 
   if(pthread_cond_init(&dst->wait_cond, NULL) != 0){
     perror("ERROR condition variable not set\n");
@@ -130,6 +135,8 @@ int cmu_close(cmu_socket_t * sock){
     perror("ERORR Null scoket\n");
     return EXIT_ERROR;
   }
+
+  ringbuffer_free(sock->recv_window.rcvq);
   return close(sock->socket);
 }
 

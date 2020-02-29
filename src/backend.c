@@ -15,12 +15,12 @@ void send_empty_pkt(
  */
 int check_ack(cmu_socket_t * sock, uint32_t seq){
   int result;
-  while(pthread_mutex_lock(&(sock->window.ack_lock)) != 0);
-  if(sock->window.last_ack_received > seq)
+  while(pthread_mutex_lock(&(sock->send_window.ack_lock)) != 0);
+  if(sock->send_window.last_ack_received > seq)
     result = TRUE;
   else
     result = FALSE;
-  pthread_mutex_unlock(&(sock->window.ack_lock));
+  pthread_mutex_unlock(&(sock->send_window.ack_lock));
   return result;
 }
 
@@ -60,7 +60,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
 
     case SYN_FLAG_MASK | ACK_FLAG_MASK:
         seq = get_seq(pkt);
-        sock->window.last_ack_received = get_ack(pkt);
+        sock->send_window.last_ack_received = get_ack(pkt);
         rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, seq + 1 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
@@ -93,16 +93,16 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         sock->remote_closed = TRUE;
         pthread_mutex_unlock(&(sock->death_lock));
 
-        if(get_ack(pkt) > sock->window.last_ack_received)
-            sock->window.last_ack_received = get_ack(pkt);
+        if(get_ack(pkt) > sock->send_window.last_ack_received)
+            sock->send_window.last_ack_received = get_ack(pkt);
 
         seq = get_seq(pkt);
         send_empty_pkt(sock, ACK_FLAG_MASK, 0, seq+1);
         break;
 
     case ACK_FLAG_MASK:
-      if(get_ack(pkt) > sock->window.last_ack_received)
-        sock->window.last_ack_received = get_ack(pkt);
+      if(get_ack(pkt) > sock->send_window.last_ack_received)
+        sock->send_window.last_ack_received = get_ack(pkt);
       break;
 
     default:
@@ -113,10 +113,10 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         &(sock->conn), conn_len);
       free(rsp);
 
-      if(seq > sock->window.last_seq_received || (seq == 0 && 
-        sock->window.last_seq_received == 0)){
+      if(seq > sock->recv_window.last_seq_received || (seq == 0 && 
+        sock->recv_window.last_seq_received == 0)){
         
-        sock->window.last_seq_received = seq;
+        sock->recv_window.last_seq_received = seq;
         data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
         if(sock->received_buf == NULL){
           sock->received_buf = malloc(data_len);
@@ -190,13 +190,12 @@ void check_for_data(cmu_socket_t * sock, int flags){
  * Param: data - The data to be sent
  * Param: buf_len - the length of the data being sent
  *
- * Purpose: Breaks up the data into packets and sends a single 
- *  packet at a time.
+ * Purpose: Breaks up the data into packets and send multiple packets.
  *
  * Comment: This will need to be updated for checkpoints 1,2,3
  *
  */
-void single_send(cmu_socket_t * sock, char* data, int buf_len){
+void multi_send(cmu_socket_t * sock, char* data, int buf_len){
     char* msg;
     char* data_offset = data;
     int sockfd, plen;
@@ -206,7 +205,7 @@ void single_send(cmu_socket_t * sock, char* data, int buf_len){
     sockfd = sock->socket; 
     if(buf_len > 0){
       while(buf_len != 0){
-        seq = sock->window.last_ack_received;
+        seq = sock->send_window.last_ack_received;
         if(buf_len <= MAX_DLEN){
             plen = DEFAULT_HEADER_LEN + buf_len;
             msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, 
@@ -263,7 +262,7 @@ void* begin_backend(void * in){
       free(dst->sending_buf);
       dst->sending_buf = NULL;
       pthread_mutex_unlock(&(dst->send_lock));
-      single_send(dst, data, buf_len);
+      multi_send(dst, data, buf_len);
       free(data);
     }
     else
@@ -330,7 +329,7 @@ int close_conn(cmu_socket_t *dst) {
     printf("debug: remote_closed: %d\n", remote_closed);
 
     while(pthread_mutex_lock(&(dst->send_lock)) != 0);
-    seq = dst->window.last_ack_received;
+    seq = dst->send_window.last_ack_received;
     printf("debug: seq: %d\n", seq);
     pthread_mutex_unlock(&(dst->send_lock));
 

@@ -37,7 +37,8 @@ typedef struct {
 	int dying;
     int remote_closed;
 	pthread_mutex_t death_lock;
-	window_t window;
+	send_window_t send_window;
+	recv_window_t recv_window;
 } cmu_socket_t;
 
 #endif
