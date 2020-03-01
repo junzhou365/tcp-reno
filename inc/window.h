@@ -14,6 +14,8 @@ typedef struct {
 
 typedef struct {
 	uint32_t last_seq_received;
+	uint32_t next_exp_byte;
+    uint32_t last_byte_read;
 
     ringbuffer* recvq;
 } recv_window_t;

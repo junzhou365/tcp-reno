@@ -44,6 +44,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
   uint8_t flags = get_flags(pkt);
   uint32_t data_len, seq;
   socklen_t conn_len = sizeof(sock->conn);
+  recv_window_t *win = &sock->recv_window;
 
   // TODO: piggyback ACK
   /*int death;*/
@@ -112,26 +113,58 @@ void handle_message(cmu_socket_t * sock, char* pkt){
 
     default:
       seq = get_seq(pkt);
-      rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, seq+1, 
-        DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+      data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
+
+      printf("debug: seq: %d, len: %d\n", seq, data_len);
+
+      uint32_t new_data_offset = 0; 
+      uint32_t new_data_len = data_len; 
+      if (win->next_exp_byte > seq) {
+          new_data_offset = win->next_exp_byte - seq;
+          new_data_len -= new_data_offset;
+      }
+
+      printf("debug: new_data_len: %d, exp_byte: %d, offset: %d\n",
+            new_data_len, win->next_exp_byte, new_data_offset);
+
+      if (ringbuffer_free_space(win->recvq) >= new_data_len) {
+          ringbuffer_insert(win->recvq,
+            win->next_exp_byte - win->last_byte_read - 1,
+            pkt + DEFAULT_HEADER_LEN + new_data_offset,
+            new_data_len);
+      }
+
+      if (new_data_offset <= 0) {
+          win->next_exp_byte += new_data_len;
+          ringbuffer_move_end(win->recvq, (int)new_data_len);
+      }
+
+      uint32_t reply_ack = win->next_exp_byte;
+      uint32_t win_size = ringbuffer_free_space(win->recvq);
+
+      printf("debug: reply_ack: %d, win_size: %d\n", reply_ack, win_size);
+
+      rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, reply_ack, 
+        DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, win_size, 0, NULL, NULL, 0);
       sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*) 
         &(sock->conn), conn_len);
       free(rsp);
 
-      if(seq > sock->recv_window.last_seq_received || (seq == 0 && 
-        sock->recv_window.last_seq_received == 0)){
-        
-        sock->recv_window.last_seq_received = seq;
-        data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
-        if(sock->received_buf == NULL){
-          sock->received_buf = malloc(data_len);
-        }
-        else{
-          sock->received_buf = realloc(sock->received_buf, sock->received_len + data_len);
-        }
-        memcpy(sock->received_buf + sock->received_len, pkt + DEFAULT_HEADER_LEN, data_len);
-        sock->received_len += data_len;
+      uint32_t pop_data_len = win->next_exp_byte - win->last_byte_read;
+      char *data = malloc(pop_data_len);
+      int ret = ringbuffer_pop(win->recvq, &data, pop_data_len);
+      assert(ret == 0);
+
+      win->last_byte_read += pop_data_len;
+
+      if(sock->received_buf == NULL){
+        sock->received_buf = data;
       }
+      else{
+        sock->received_buf = realloc(sock->received_buf, sock->received_len + pop_data_len);
+      }
+      memcpy(sock->received_buf + sock->received_len, data, pop_data_len);
+      sock->received_len += pop_data_len;
 
       break;
   }

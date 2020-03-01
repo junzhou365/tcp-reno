@@ -43,6 +43,8 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
 
   dst->recv_window.last_seq_received = 0;
+  dst->recv_window.next_exp_byte = 1;
+  dst->recv_window.last_byte_read = 0;
   dst->recv_window.recvq = new_ringbuffer(10 << 10);
 
   if(pthread_cond_init(&dst->wait_cond, NULL) != 0){
