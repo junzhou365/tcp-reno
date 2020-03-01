@@ -4,18 +4,18 @@
 #include "ringbuffer.h"
 
 typedef struct {
-	uint32_t cur_seq;
 	uint32_t last_ack_received;
 	uint32_t last_win_received;
+    uint32_t last_byte_sent;
 	pthread_mutex_t ack_lock;
 
-    //ringbuffer* sndq;
+    ringbuffer* sendq;
 } send_window_t;
 
 typedef struct {
 	uint32_t last_seq_received;
 
-    ringbuffer* rcvq;
+    ringbuffer* recvq;
 } recv_window_t;
 
 

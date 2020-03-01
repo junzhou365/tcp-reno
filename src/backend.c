@@ -1,7 +1,12 @@
 #include "backend.h"
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
+#include <assert.h>
 #include "ringbuffer.h"
+
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 
 void send_empty_pkt(
     cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack);
@@ -185,48 +190,121 @@ void check_for_data(cmu_socket_t * sock, int flags){
   pthread_mutex_unlock(&(sock->recv_lock));
 }
 
+
+void send_within_window(cmu_socket_t * sock) {
+
+    send_window_t *win = &sock->send_window;
+
+    uint32_t cur_win = win->last_byte_sent - win->last_ack_received;
+    assert(win->last_byte_sent >= win->last_ack_received);
+    if (cur_win >= win->last_win_received) {
+        return;
+    }
+
+
+    char *send_buf = malloc(win->last_win_received);
+    int send_len = 0;
+
+    int ret;
+
+    int peek_len = ringbuffer_len(win->sendq);
+    if (peek_len > win->last_win_received)
+        peek_len = win->last_win_received;
+
+
+    printf("debug: peek_len: %d\n", send_len);
+    ret = ringbuffer_peek_from_start(
+            win->sendq, peek_len, &send_buf, &send_len);
+    assert(ret == 0);
+
+    printf("debug: send_len: %d\n", send_len);
+
+    char* data_offset = send_buf;
+    int sockfd, plen;
+    size_t conn_len = sizeof(sock->conn);
+
+    uint32_t seq = win->last_ack_received;
+
+    sockfd = sock->socket;
+    while(send_len > 0){
+
+      char* msg;
+      if (send_len <= MAX_DLEN) {
+        plen = DEFAULT_HEADER_LEN + send_len;
+        msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq,
+          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, send_len);
+      }
+      else {
+        plen = DEFAULT_HEADER_LEN + MAX_DLEN;
+        msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq,
+          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
+      }
+
+      printf("debug: send: %d\n", plen - DEFAULT_HEADER_LEN);
+      sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
+
+      data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
+
+      send_len -= plen - DEFAULT_HEADER_LEN;
+      seq += plen - DEFAULT_HEADER_LEN;
+      win->last_byte_sent = MAX(seq, win->last_byte_sent);
+    }
+
+    free(send_buf);
+
+    printf("debug: send_within_window done\n");
+}
+
 /*
  * Param: sock - The socket to use for sending data
- * Param: data - The data to be sent
- * Param: buf_len - the length of the data being sent
- *
  * Purpose: Breaks up the data into packets and send multiple packets.
  *
  * Comment: This will need to be updated for checkpoints 1,2,3
  *
  */
-void multi_send(cmu_socket_t * sock, char* data, int buf_len){
-    char* msg;
-    char* data_offset = data;
-    int sockfd, plen;
-    size_t conn_len = sizeof(sock->conn);
-    uint32_t seq;
+void multi_send(cmu_socket_t * sock, char *data, int len) {
 
-    sockfd = sock->socket; 
-    if(buf_len > 0){
-      while(buf_len != 0){
-        seq = sock->send_window.last_ack_received;
-        if(buf_len <= MAX_DLEN){
-            plen = DEFAULT_HEADER_LEN + buf_len;
-            msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, 
-              DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, buf_len);
-            buf_len = 0;
-          }
-          else{
-            plen = DEFAULT_HEADER_LEN + MAX_DLEN;
-            msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, 
-              DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
-            buf_len -= MAX_DLEN;
-          }
-        while(TRUE){
-          sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
-          check_for_data(sock, TIMEOUT);
-          if(check_ack(sock, seq))
-            break;
+    send_window_t *win = &sock->send_window;
+    uint32_t last_byte_to_send = win->last_ack_received + len - 1;
+
+    int ret;
+
+    char *data_offset = data;
+
+    uint32_t last_ack = win->last_ack_received;
+    while (win->last_ack_received <= last_byte_to_send) {
+
+        printf("debug: last_ack: %d, last_byte: %d\n",
+                win->last_ack_received, last_byte_to_send);
+
+        int send_len = MIN(ringbuffer_free_space(win->sendq), len);
+
+        printf("debug: send_len for push: %d\n", send_len);
+        ret = ringbuffer_push(win->sendq, data_offset, send_len);
+        assert(ret == 0);
+        len -= send_len;
+
+        send_within_window(sock);
+
+        clock_t start = clock();
+        while (TRUE) {
+            clock_t diff = clock() - start;
+            float dur = ((float)diff) / 10;
+            printf("debug: dur: %f\n", dur);
+            if (dur > 3)
+                break;
+            check_for_data(sock, TIMEOUT);
         }
-        data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
-      }
+
+
+        ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - last_ack);
+        assert(ret == 0);
+
+        last_ack = win->last_ack_received;
+        last_byte_to_send = win->last_ack_received + len - 1;
     }
+
+    printf("debug: multi_send done\n");
 }
 
 /*
@@ -262,6 +340,7 @@ void* begin_backend(void * in){
       free(dst->sending_buf);
       dst->sending_buf = NULL;
       pthread_mutex_unlock(&(dst->send_lock));
+
       multi_send(dst, data, buf_len);
       free(data);
     }
