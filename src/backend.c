@@ -4,6 +4,7 @@
 #include <time.h>
 #include <assert.h>
 #include "ringbuffer.h"
+#include "log.h"
 
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
@@ -115,7 +116,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       seq = get_seq(pkt);
       data_len = get_plen(pkt) - DEFAULT_HEADER_LEN;
 
-      printf("debug: seq: %d, len: %d\n", seq, data_len);
+      log_debugf("debug: seq: %d, len: %d\n", seq, data_len);
 
       uint32_t new_data_offset = 0; 
       uint32_t new_data_len = data_len; 
@@ -124,7 +125,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
           new_data_len -= new_data_offset;
       }
 
-      printf("debug: new_data_len: %d, exp_byte: %d, offset: %d\n",
+      log_debugf("debug: new_data_len: %d, exp_byte: %d, offset: %d\n",
             new_data_len, win->next_exp_byte, new_data_offset);
 
       if (ringbuffer_free_space(win->recvq) >= new_data_len) {
@@ -142,7 +143,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       uint32_t reply_ack = win->next_exp_byte;
       uint32_t win_size = ringbuffer_free_space(win->recvq);
 
-      printf("debug: reply_ack: %d, win_size: %d\n", reply_ack, win_size);
+      log_debugf("debug: reply_ack: %d, win_size: %d\n", reply_ack, win_size);
 
       rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, reply_ack, 
         DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, win_size, 0, NULL, NULL, 0);
@@ -245,12 +246,12 @@ void send_within_window(cmu_socket_t * sock) {
         peek_len = win->last_win_received;
 
 
-    printf("debug: peek_len: %d\n", send_len);
+    log_debugf("debug: peek_len: %d\n", send_len);
     ret = ringbuffer_peek_from_start(
             win->sendq, peek_len, &send_buf, &send_len);
     assert(ret == 0);
 
-    printf("debug: send_len: %d\n", send_len);
+    log_debugf("debug: send_len: %d\n", send_len);
 
     char* data_offset = send_buf;
     int sockfd, plen;
@@ -273,7 +274,7 @@ void send_within_window(cmu_socket_t * sock) {
           DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
       }
 
-      printf("debug: send: %d\n", plen - DEFAULT_HEADER_LEN);
+      log_debugf("debug: send: %d\n", plen - DEFAULT_HEADER_LEN);
       sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
 
       data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
@@ -285,7 +286,7 @@ void send_within_window(cmu_socket_t * sock) {
 
     free(send_buf);
 
-    printf("debug: send_within_window done\n");
+    log_debugf("debug: send_within_window done\n");
 }
 
 /*
@@ -307,12 +308,12 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
     uint32_t last_ack = win->last_ack_received;
     while (win->last_ack_received <= last_byte_to_send) {
 
-        printf("debug: last_ack: %d, last_byte: %d\n",
+        log_debugf("debug: last_ack: %d, last_byte: %d\n",
                 win->last_ack_received, last_byte_to_send);
 
         int send_len = MIN(ringbuffer_free_space(win->sendq), len);
 
-        printf("debug: send_len for push: %d\n", send_len);
+        log_debugf("debug: send_len for push: %d\n", send_len);
         ret = ringbuffer_push(win->sendq, data_offset, send_len);
         assert(ret == 0);
         len -= send_len;
@@ -323,7 +324,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
         while (TRUE) {
             clock_t diff = clock() - start;
             float dur = ((float)diff) / 10;
-            printf("debug: dur: %f\n", dur);
+            log_debugf("debug: dur: %f\n", dur);
             if (dur > 3)
                 break;
             check_for_data(sock, TIMEOUT);
@@ -337,7 +338,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
         last_byte_to_send = win->last_ack_received + len - 1;
     }
 
-    printf("debug: multi_send done\n");
+    log_debugf("debug: multi_send done\n");
 }
 
 /*
@@ -438,11 +439,11 @@ int close_conn(cmu_socket_t *dst) {
     uint32_t seq;
     int remote_closed = get_remote_closed(dst);
 
-    printf("debug: remote_closed: %d\n", remote_closed);
+    log_debugf("debug: remote_closed: %d\n", remote_closed);
 
     while(pthread_mutex_lock(&(dst->send_lock)) != 0);
     seq = dst->send_window.last_ack_received;
-    printf("debug: seq: %d\n", seq);
+    log_debugf("debug: seq: %d\n", seq);
     pthread_mutex_unlock(&(dst->send_lock));
 
     // LAST_ACK
@@ -461,7 +462,7 @@ int close_conn(cmu_socket_t *dst) {
     // FIN_WAIT_1 + FIN_WAIT_2
     while (!remote_closed) {
 
-        printf("debug: fin_acked: %d\n", fin_acked);
+        log_debugf("debug: fin_acked: %d\n", fin_acked);
 
         // TODO: retransmit
         if (!fin_acked)
