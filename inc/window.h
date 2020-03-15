@@ -12,10 +12,12 @@ typedef struct {
 
     ringbuffer* sendq;
 
-    long send_time;
+    int duplicates;
+
+    struct timespec send_time;
     long est_rtt; // the RTT in micro seconds, scaled
     long deviation; // in micro seconds, scaled
-    long timeout;
+    long timeout; // in micro seconds
 } send_window_t;
 
 typedef struct {

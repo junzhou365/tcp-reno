@@ -13,10 +13,23 @@ void send_empty_pkt(cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack);
 void update_rtts(int sample_rtt, long *est_rtt, long *deviation);
 long get_timeout(long est_rtt, long deviation);
 
-long get_curusec() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_nsec / 1000;
+int get_curusec(struct timespec *ts) {
+    return clock_gettime(CLOCK_REALTIME, ts);
+}
+
+long diff_ts_usec(const struct timespec *now, const struct timespec *since) {
+    long ret;
+    double sec_diff = difftime(now->tv_sec, since->tv_sec);
+    if (sec_diff > 0) {
+        ret = ((long)(sec_diff - 1) * 1000000) + (1000000000L + now->tv_nsec - since->tv_nsec) / 1000;
+    } else {
+        assert(sec_diff == 0);
+        ret = (now->tv_nsec - since->tv_nsec) / 1000;
+    }
+
+    log_debugf("diff_ts_usec: %d, sec_diff: %d\n", ret, sec_diff);
+    assert(ret >= 0);
+    return ret;
 }
 
 /*
@@ -66,6 +79,8 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         seq = get_seq(pkt);
         rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*new seq*/, seq + 1 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK|ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+
+        assert(get_curusec(&(sock->send_window.send_time)) == 0);
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(sock->conn), conn_len);
         free(rsp);
@@ -117,11 +132,14 @@ void handle_message(cmu_socket_t * sock, char* pkt){
     case ACK_FLAG_MASK:
       if(get_ack(pkt) > sock->send_window.last_ack_received) {
         sock->send_window.last_ack_received = get_ack(pkt);
+        sock->send_window.duplicates = 0;
 
-        long ack_time = get_curusec();
+        struct timespec ack_time;
+        assert(get_curusec(&ack_time) == 0);
         log_debugf("ack time: %d\n", ack_time);
-        long new_sample_rtt_usec = ack_time - sock->send_window.send_time;
+        long new_sample_rtt_usec = diff_ts_usec(&ack_time, &(sock->send_window.send_time));
         log_debugf("new sample rtt: %d\n", new_sample_rtt_usec);
+        assert(new_sample_rtt_usec > 0);
 
         update_rtts(
                 new_sample_rtt_usec,
@@ -131,6 +149,8 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         sock->send_window.timeout =
             get_timeout(sock->send_window.est_rtt, sock->send_window.deviation);
         log_debugf("new timeout: %d\n", sock->send_window.timeout);
+      } else {
+          sock->send_window.duplicates++;
       }
       break;
 
@@ -196,6 +216,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
 // sample_rtt is not scaled
 // // est_rtt and deviation is scaled to 2^3
 void update_rtts(int sample_rtt, long *est_rtt, long *deviation) {
+    log_debugf("inital est_rtt: %d, dev: %d\n", *est_rtt, *deviation);
     sample_rtt -= (*est_rtt >> 3);
     *est_rtt += sample_rtt;
     if (sample_rtt < 0)
@@ -229,8 +250,6 @@ void check_for_data(cmu_socket_t * sock, int flags){
   time_out.tv_sec = 0;
   time_out.tv_usec = sock->send_window.timeout;
       
-
-
   while(pthread_mutex_lock(&(sock->recv_lock)) != 0);
   switch(flags){
     case NO_FLAG:
@@ -303,7 +322,7 @@ void send_within_window(cmu_socket_t * sock) {
         return;
 
     // all sent packets have the same clock time
-    sock->send_window.send_time = get_curusec();
+    assert(get_curusec(&(sock->send_window.send_time)) == 0);
     log_debugf("new send time %d\n", sock->send_window.send_time);
 
     sockfd = sock->socket;
@@ -368,17 +387,29 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
 
         send_within_window(sock);
 
-        /*time_t start = time(NULL);*/
-        /*time_t now;*/
-        /*while (TRUE) {*/
-            /*time(&now);*/
-            /*double dur = difftime(now, start);*/
-            /*if (dur > 3)*/
-                /*break;*/
-            /*check_for_data(sock, TIMEOUT);*/
-        /*}*/
-        check_for_data(sock, TIMEOUT);
+        // the windowed data should be acked in time
+        long prev_timeout = sock->send_window.timeout;
+        if (prev_timeout <= 0) {
+            prev_timeout =
+                get_timeout(sock->send_window.est_rtt, sock->send_window.deviation);
+        }
 
+        struct timespec start;
+        assert(get_curusec(&start) == 0);
+        log_debugf("prev timeout: %d, start: %d\n", prev_timeout, start);
+
+        while (TRUE) {
+            check_for_data(sock, TIMEOUT);
+            struct timespec now;
+            now.tv_sec = 0;
+            now.tv_nsec = 0;
+            assert(get_curusec(&now) == 0);
+            long diff = diff_ts_usec(&now, &start);
+            log_debugf("diff: %d, now: %d, start: %d\n", diff, now, start);
+            assert(diff > 0);
+            if (diff >= prev_timeout)
+                break;
+        }
 
         ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - last_ack);
         assert(ret == 0);
@@ -464,6 +495,7 @@ int establish_conn(cmu_socket_t *dst) {
     cmu_socket_t *sock = dst;
 
     while (TRUE) {
+        assert(get_curusec(&(sock->send_window.send_time)) == 0);
         send_empty_pkt(sock, SYN_FLAG_MASK, 0, 0);
         check_for_data(dst, TIMEOUT);
         if (check_ack(sock, 0))
