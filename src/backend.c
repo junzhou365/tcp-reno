@@ -407,8 +407,11 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
             long diff = diff_ts_usec(&now, &start);
             log_debugf("diff: %d, now: %d, start: %d\n", diff, now, start);
             assert(diff > 0);
-            if (diff >= prev_timeout)
+            if (diff >= prev_timeout || sock->send_window.duplicates >= 3) {
+                sock->send_window.duplicates = 0;
                 break;
+            }
+
         }
 
         ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - last_ack);
