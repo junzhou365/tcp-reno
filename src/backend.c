@@ -9,8 +9,15 @@
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 
-void send_empty_pkt(
-    cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack);
+void send_empty_pkt(cmu_socket_t *sock, int flag, uint32_t seq, uint32_t ack);
+void update_rtts(int sample_rtt, long *est_rtt, long *deviation);
+long get_timeout(long est_rtt, long deviation);
+
+long get_curusec() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_nsec / 1000;
+}
 
 /*
  * Param: sock - The socket to check for acknowledgements. 
@@ -108,8 +115,23 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         break;
 
     case ACK_FLAG_MASK:
-      if(get_ack(pkt) > sock->send_window.last_ack_received)
+      if(get_ack(pkt) > sock->send_window.last_ack_received) {
         sock->send_window.last_ack_received = get_ack(pkt);
+
+        long ack_time = get_curusec();
+        log_debugf("ack time: %d\n", ack_time);
+        long new_sample_rtt_usec = ack_time - sock->send_window.send_time;
+        log_debugf("new sample rtt: %d\n", new_sample_rtt_usec);
+
+        update_rtts(
+                new_sample_rtt_usec,
+                &sock->send_window.est_rtt,
+                &sock->send_window.deviation
+                );
+        sock->send_window.timeout =
+            get_timeout(sock->send_window.est_rtt, sock->send_window.deviation);
+        log_debugf("new timeout: %d\n", sock->send_window.timeout);
+      }
       break;
 
     default:
@@ -171,6 +193,22 @@ void handle_message(cmu_socket_t * sock, char* pkt){
   }
 }
 
+// sample_rtt is not scaled
+// // est_rtt and deviation is scaled to 2^3
+void update_rtts(int sample_rtt, long *est_rtt, long *deviation) {
+    sample_rtt -= (*est_rtt >> 3);
+    *est_rtt += sample_rtt;
+    if (sample_rtt < 0)
+        sample_rtt = -sample_rtt;
+
+    sample_rtt -= (*deviation >> 3);
+    *deviation += sample_rtt;
+}
+
+long get_timeout(long est_rtt, long deviation) {
+    return (est_rtt >> 3) + (deviation >> 1);
+}
+
 /*
  * Param: sock - The socket used for receiving data on the connection.
  * Param: flags - Signify different checks for checking on received data.
@@ -186,9 +224,11 @@ void check_for_data(cmu_socket_t * sock, int flags){
   ssize_t len = 0;
   uint32_t plen = 0, buf_size = 0, n = 0;
   fd_set ackFD;
+
   struct timeval time_out;
-  time_out.tv_sec = 3;
-  time_out.tv_usec = 0;
+  time_out.tv_sec = 0;
+  time_out.tv_usec = sock->send_window.timeout;
+      
 
 
   while(pthread_mutex_lock(&(sock->recv_lock)) != 0);
@@ -259,6 +299,13 @@ void send_within_window(cmu_socket_t * sock) {
 
     uint32_t seq = win->last_ack_received;
 
+    if (send_len == 0)
+        return;
+
+    // all sent packets have the same clock time
+    sock->send_window.send_time = get_curusec();
+    log_debugf("new send time %d\n", sock->send_window.send_time);
+
     sockfd = sock->socket;
     while(send_len > 0){
 
@@ -303,6 +350,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
 
     int ret;
 
+    log_debugf("debug: multi_send len:%d\n", len);
     char *data_offset = data;
 
     uint32_t last_ack = win->last_ack_received;
@@ -320,15 +368,16 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
 
         send_within_window(sock);
 
-        clock_t start = clock();
-        while (TRUE) {
-            clock_t diff = clock() - start;
-            float dur = ((float)diff) / 10;
-            log_debugf("debug: dur: %f\n", dur);
-            if (dur > 3)
-                break;
-            check_for_data(sock, TIMEOUT);
-        }
+        /*time_t start = time(NULL);*/
+        /*time_t now;*/
+        /*while (TRUE) {*/
+            /*time(&now);*/
+            /*double dur = difftime(now, start);*/
+            /*if (dur > 3)*/
+                /*break;*/
+            /*check_for_data(sock, TIMEOUT);*/
+        /*}*/
+        check_for_data(sock, TIMEOUT);
 
 
         ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - last_ack);
@@ -476,6 +525,7 @@ int close_conn(cmu_socket_t *dst) {
             break;
     }
 
+    log_debugf("final stage, sleep 10 seconds\n");
     // 120 is too long in the test
     sleep(10);
     return EXIT_SUCCESS;

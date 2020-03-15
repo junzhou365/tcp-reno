@@ -1,6 +1,7 @@
 #ifndef _WINDOW_H_
 #define _WINDOW_H_
 
+#include <time.h>
 #include "ringbuffer.h"
 
 typedef struct {
@@ -10,6 +11,11 @@ typedef struct {
 	pthread_mutex_t ack_lock;
 
     ringbuffer* sendq;
+
+    long send_time;
+    long est_rtt; // the RTT in micro seconds, scaled
+    long deviation; // in micro seconds, scaled
+    long timeout;
 } send_window_t;
 
 typedef struct {
