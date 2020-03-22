@@ -104,8 +104,8 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         pthread_mutex_unlock(&(sock->death_lock));
 
         uint8_t send_flag = ACK_FLAG_MASK;
-        uint8_t ack = get_seq(pkt) + 1;
-        seq = 0;
+        uint32_t ack = get_seq(pkt) + 1;
+        seq = ack;
         // TODO: piggyback ACK
         //if (death) {
         //    // we could piggyback the ack onto the FIN
@@ -113,6 +113,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         //    seq = sock->window.last_ack_received;
         //}
 
+        log_debugf("ack to FIN: %d\n", ack);
         send_empty_pkt(sock, send_flag, seq, ack);
 
         break;
@@ -133,6 +134,8 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       if(get_ack(pkt) > sock->send_window.last_ack_received) {
         sock->send_window.last_ack_received = get_ack(pkt);
         sock->send_window.duplicates = 0;
+
+        log_debugf("receive ack: %d\n", get_ack(pkt));
 
         struct timespec ack_time;
         assert(get_curusec(&ack_time) == 0);
@@ -288,11 +291,11 @@ void send_within_window(cmu_socket_t * sock) {
 
     send_window_t *win = &sock->send_window;
 
-    uint32_t cur_win = win->last_byte_sent - win->last_ack_received;
-    assert(win->last_byte_sent >= win->last_ack_received);
-    if (cur_win >= win->last_win_received) {
-        return;
-    }
+    assert(win->last_byte_sent >= win->last_ack_received - 1);
+    /*uint32_t cur_win = win->last_byte_sent - win->last_ack_received;*/
+    /*if (cur_win >= win->last_win_received) {*/
+        /*return 0;*/
+    /*}*/
 
 
     char *send_buf = malloc(win->last_win_received);
@@ -347,7 +350,7 @@ void send_within_window(cmu_socket_t * sock) {
 
       send_len -= plen - DEFAULT_HEADER_LEN;
       seq += plen - DEFAULT_HEADER_LEN;
-      win->last_byte_sent = MAX(seq, win->last_byte_sent);
+      win->last_byte_sent = MAX(seq - 1, win->last_byte_sent);
     }
 
     free(send_buf);
@@ -368,11 +371,12 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
     uint32_t last_byte_to_send = win->last_ack_received + len - 1;
 
     int ret;
+    int orig_len = len;
 
-    log_debugf("debug: multi_send len:%d\n", len);
+    log_debugf("debug: multi_send len:%d\n", orig_len);
     char *data_offset = data;
 
-    uint32_t last_ack = win->last_ack_received;
+    uint32_t prev_ack = win->last_ack_received;
     while (win->last_ack_received <= last_byte_to_send) {
 
         log_debugf("debug: last_ack: %d, last_byte: %d\n",
@@ -412,16 +416,20 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
                 break;
             }
 
+            if (win->last_ack_received > last_byte_to_send)
+                break;
         }
 
-        ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - last_ack);
+        ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - prev_ack);
         assert(ret == 0);
+        prev_ack = win->last_ack_received;
 
-        last_ack = win->last_ack_received;
-        last_byte_to_send = win->last_ack_received + len - 1;
+        /*last_byte_to_send = win->last_ack_received + len - 1;*/
+        /*sock->send_window.last_byte_sent = last_ack - 1;*/
+        log_debugf("last_ack_received update to %d\n", sock->send_window.last_ack_received);
     }
 
-    log_debugf("debug: multi_send done\n");
+    log_debugf("debug: multi_send done for len %d\n", orig_len);
 }
 
 /*
@@ -527,7 +535,7 @@ int close_conn(cmu_socket_t *dst) {
 
     while(pthread_mutex_lock(&(dst->send_lock)) != 0);
     seq = dst->send_window.last_ack_received;
-    log_debugf("debug: seq: %d\n", seq);
+    log_debugf("debug: FIN seq: %d\n", seq);
     pthread_mutex_unlock(&(dst->send_lock));
 
     // LAST_ACK

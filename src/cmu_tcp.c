@@ -39,7 +39,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
 
   dst->send_window.last_ack_received = 0;
   dst->send_window.last_win_received = 10 << 10; // TODO
-  dst->send_window.last_byte_sent = 1;
+  dst->send_window.last_byte_sent = 0;
   dst->send_window.sendq = new_ringbuffer(10 << 10);
   dst->send_window.duplicates = 0;
   dst->send_window.send_time.tv_sec = 0;
@@ -47,7 +47,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->send_window.deviation = 0;
   dst->send_window.est_rtt = 0;
   dst->send_window.deviation = 0;
-  dst->send_window.timeout = 0;
+  dst->send_window.timeout = WINDOW_INITIAL_RTT * 1000;
   pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
   dst->send_window.cwnd = WINDOW_INITIAL_WINDOW_SIZE;
 

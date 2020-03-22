@@ -24,7 +24,6 @@ void functionality(cmu_socket_t  * sock){
     printf("N: %d\n", n);
     fp = fopen("./test/file.c", "w+");
     fwrite(buf, 1, n, fp);
-
 }
 
 
