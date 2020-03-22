@@ -14,6 +14,8 @@ typedef struct {
 
     int duplicates;
 
+    int cwnd;
+
     struct timespec send_time;
     long est_rtt; // the RTT in micro seconds, scaled
     long deviation; // in micro seconds, scaled
