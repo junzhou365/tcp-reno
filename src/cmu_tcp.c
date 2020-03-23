@@ -45,15 +45,16 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->send_window.send_time.tv_sec = 0;
   dst->send_window.send_time.tv_nsec = 0;
   dst->send_window.deviation = 0;
-  dst->send_window.est_rtt = 0;
+  dst->send_window.est_rtt = WINDOW_INITIAL_RTT * 1000;
   dst->send_window.deviation = 0;
   dst->send_window.timeout = WINDOW_INITIAL_RTT * 1000;
   pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
   dst->send_window.cwnd = WINDOW_INITIAL_WINDOW_SIZE;
+  dst->send_window.cong_state = CONG_SLOW_START;
 
   dst->recv_window.last_seq_received = 0;
-  dst->recv_window.next_exp_byte = 1;
-  dst->recv_window.last_byte_read = 0;
+  dst->recv_window.next_exp_byte = 0;
+  dst->recv_window.last_byte_read = -1;
   dst->recv_window.recvq = new_ringbuffer(10 << 10);
 
   if(pthread_cond_init(&dst->wait_cond, NULL) != 0){

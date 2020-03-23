@@ -4,6 +4,10 @@
 #include <time.h>
 #include "ringbuffer.h"
 
+#define CONG_SLOW_START     0
+#define CONG_AVOID          1
+#define CONG_RECOV          2
+
 typedef struct {
 	uint32_t last_ack_received;
 	uint32_t last_win_received;
@@ -15,6 +19,7 @@ typedef struct {
     int duplicates;
 
     int cwnd;
+    int cong_state;
 
     struct timespec send_time;
     long est_rtt; // the RTT in micro seconds, scaled

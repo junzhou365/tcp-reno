@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #define DEBUG_LEVEL 1
+#define INFO_LEVEL  2
 
 #define LEVEL DEBUG_LEVEL
 

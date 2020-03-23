@@ -11,7 +11,7 @@ OBJS = $(BUILD_DIR)/cmu_packet.o \
 	$(BUILD_DIR)/backend.o \
 	$(BUILD_DIR)/ringbuffer.o
 
-.PHONY: all
+.PHONY: all server client $(BUILD_DIR)/%.o
 
 default:all
 all: server client
