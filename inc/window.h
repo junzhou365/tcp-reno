@@ -19,6 +19,7 @@ typedef struct {
     int duplicates;
 
     int cwnd;
+    int ssthresh;
     int cong_state;
 
     struct timespec send_time;

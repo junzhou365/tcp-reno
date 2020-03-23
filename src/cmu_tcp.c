@@ -49,7 +49,8 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->send_window.deviation = 0;
   dst->send_window.timeout = WINDOW_INITIAL_RTT * 1000;
   pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
-  dst->send_window.cwnd = WINDOW_INITIAL_WINDOW_SIZE;
+  dst->send_window.cwnd = WINDOW_INITIAL_WINDOW_SIZE * (1 << 10);
+  dst->send_window.ssthresh = WINDOW_INITIAL_SSTHRESH * (1 << 10);
   dst->send_window.cong_state = CONG_SLOW_START;
 
   dst->recv_window.last_seq_received = 0;
