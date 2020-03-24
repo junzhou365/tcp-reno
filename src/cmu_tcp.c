@@ -38,9 +38,9 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   pthread_mutex_init(&(dst->death_lock), NULL);
 
   dst->send_window.last_ack_received = 0;
-  dst->send_window.last_win_received = 10 << 10; // TODO
+  dst->send_window.last_win_received = MAX_NETWORK_BUFFER;
   dst->send_window.last_byte_sent = 0;
-  dst->send_window.sendq = new_ringbuffer(10 << 10);
+  dst->send_window.sendq = new_ringbuffer(MAX_NETWORK_BUFFER);
   dst->send_window.duplicates = 0;
   dst->send_window.send_time.tv_sec = 0;
   dst->send_window.send_time.tv_nsec = 0;
@@ -56,7 +56,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->recv_window.last_seq_received = 0;
   dst->recv_window.next_exp_byte = 0;
   dst->recv_window.last_byte_read = -1;
-  dst->recv_window.recvq = new_ringbuffer(10 << 10);
+  dst->recv_window.recvq = new_ringbuffer(MAX_NETWORK_BUFFER);
 
   if(pthread_cond_init(&dst->wait_cond, NULL) != 0){
     perror("ERROR condition variable not set\n");

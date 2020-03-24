@@ -77,10 +77,11 @@ void handle_message(cmu_socket_t * sock, char* pkt){
 
   switch(flags){
     case SYN_FLAG_MASK:
+
         seq = get_seq(pkt);
         rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*new seq*/, seq + 1 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK|ACK_FLAG_MASK,
-          ringbuffer_free_space(win->recvq), 0, NULL, NULL, 0);
+          ringbuffer_free_space(win->recvq) - 1, 0, NULL, NULL, 0);
 
         assert(get_curusec(&(sock->send_window.send_time)) == 0);
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
@@ -97,7 +98,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         sock->send_window.last_ack_received = get_ack(pkt);
         rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, seq + 1 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK,
-          ringbuffer_free_space(win->recvq), 0, NULL, NULL, 0);
+          ringbuffer_free_space(win->recvq) - 1, 0, NULL, NULL, 0);
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(sock->conn), conn_len);
         free(rsp);
@@ -242,7 +243,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       log_debugf("recv: reply_ack: %d, win_size: %d\n", reply_ack, win_size);
 
       rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, reply_ack, 
-        DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, win_size, 0, NULL, NULL, 0);
+        DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, win_size - 1, 0, NULL, NULL, 0);
       sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*) 
         &(sock->conn), conn_len);
       free(rsp);
@@ -347,21 +348,24 @@ void send_within_window(cmu_socket_t * sock) {
 
     assert(win->last_byte_sent >= win->last_ack_received - 1);
 
-    char *send_buf = malloc(win->last_win_received);
+    uint32_t adv_win = win->last_win_received + 1;
 
     int len = ringbuffer_len(win->sendq);
 
-    len = MIN(len, win->last_win_received);
+    log_debugf("send: begin with adv_win: %d, cwnd: %d\n", adv_win, win->cwnd);
+    len = MIN(len, adv_win);
     len = MIN(len, win->cwnd);
 
-    log_debugf("debug: peek_len: %d\n", len);
+    char *send_buf = malloc(len);
+
+    log_debugf("send: peek_len: %d\n", len);
 
     int send_len = 0;
     ret = ringbuffer_peek_from_start(
             win->sendq, len, &send_buf, &send_len);
     assert(ret == 0);
 
-    log_debugf("debug: send_len: %d\n", send_len);
+    log_debugf("send: send_len: %d\n", send_len);
 
     char* data_offset = send_buf;
     int sockfd, plen;
@@ -374,7 +378,7 @@ void send_within_window(cmu_socket_t * sock) {
 
     // all sent packets have the same clock time
     assert(get_curusec(&(sock->send_window.send_time)) == 0);
-    log_debugf("new send time %d\n", sock->send_window.send_time);
+    /*log_debugf("send: new time %d\n", sock->send_window.send_time);*/
 
     sockfd = sock->socket;
     while(send_len > 0){
@@ -391,7 +395,7 @@ void send_within_window(cmu_socket_t * sock) {
           DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
       }
 
-      log_debugf("debug: send: %d\n", plen - DEFAULT_HEADER_LEN);
+      log_debugf("send: send: %d\n", plen - DEFAULT_HEADER_LEN);
       sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
 
       data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
@@ -403,7 +407,7 @@ void send_within_window(cmu_socket_t * sock) {
 
     free(send_buf);
 
-    log_debugf("debug: send_within_window done\n");
+    log_debugf("send: send_within_window done\n");
 }
 
 /*
@@ -421,18 +425,18 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
     int ret;
     int orig_len = len;
 
-    log_debugf("debug: multi_send len:%d\n", orig_len);
+    log_debugf("multi_send: len:%d\n", orig_len);
     char *data_offset = data;
 
     uint32_t prev_ack = win->last_ack_received;
     while (win->last_ack_received <= last_byte_to_send) {
 
-        log_debugf("debug: last_ack: %d, last_byte: %d\n",
+        log_debugf("multi_send: last_ack: %d, last_byte: %d\n",
                 win->last_ack_received, last_byte_to_send);
 
         int send_len = MIN(ringbuffer_free_space(win->sendq), len);
 
-        log_debugf("debug: send_len for push: %d\n", send_len);
+        log_debugf("multi_send: actual send_len for push: %d\n", send_len);
         ret = ringbuffer_push(win->sendq, data_offset, send_len);
         assert(ret == 0);
         len -= send_len;
@@ -448,7 +452,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
 
         struct timespec start;
         assert(get_curusec(&start) == 0);
-        log_debugf("prev timeout: %d, start: %d\n", prev_timeout, start);
+        log_debugf("multi_send: prev timeout: %d, start: %d\n", prev_timeout, start);
 
         // since the check_for_data checks a packet per call, we have to 
         // add the extra timeout
@@ -459,7 +463,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
             now.tv_nsec = 0;
             assert(get_curusec(&now) == 0);
             long diff = diff_ts_usec(&now, &start);
-            log_debugf("diff: %d, now: %d, start: %d\n", diff, now, start);
+            log_debugf("multi_send: diff: %d, now: %d, start: %d\n", diff, now, start);
             assert(diff > 0);
             if (diff >= prev_timeout || sock->send_window.duplicates >= 3) {
                 sock->send_window.duplicates = 0;
@@ -476,10 +480,10 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
 
         /*last_byte_to_send = win->last_ack_received + len - 1;*/
         /*sock->send_window.last_byte_sent = last_ack - 1;*/
-        log_debugf("last_ack_received update to %d\n", sock->send_window.last_ack_received);
+        log_debugf("multi_send: last_ack_received update to %d\n", sock->send_window.last_ack_received);
     }
 
-    log_debugf("debug: multi_send done for len %d\n", orig_len);
+    log_debugf("multi_send: done for len %d\n", orig_len);
 }
 
 /*
