@@ -142,8 +142,8 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         break;
 
     case ACK_FLAG_MASK:
+      log_debugf("receive ack: %d\n", get_ack(pkt));
       if(get_ack(pkt) > sock->send_window.last_ack_received) {
-        log_debugf("receive ack: %d\n", get_ack(pkt));
 
         sock->send_window.last_ack_received = get_ack(pkt);
         sock->send_window.duplicates = 0;
@@ -208,26 +208,39 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       log_debugf("recv: seq: %d, len: %d, last_byte_read: %d, next_exp_byte: %d\n",
               seq, data_len, win->last_byte_read, win->next_exp_byte);
 
-      uint32_t new_data_offset = 0; 
+      //        seq1          seq2
+      //        |             |
+      //    |           |           |
+      // last_read     next_exp    last_recv
+
+      uint32_t new_data_offset = 0; // offset from the next_exp_byte
       uint32_t new_data_len = data_len; 
 
-      // later packet
-      if (seq + data_len - 1 <= win->last_byte_read)
+      // very old bytes that we've read
+      if (seq + data_len - 1 <= win->last_byte_read) {
+          uint32_t win_size = MAX_NETWORK_BUFFER - ((win->next_exp_byte - 1) - win->last_byte_read);
+          rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, win->next_exp_byte, 
+            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, win_size - 1, 0, NULL, NULL, 0);
+          sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*) 
+            &(sock->conn), conn_len);
+          free(rsp);
           return;
+      }
 
       // subtract what we've received
-      if (win->next_exp_byte > seq) {
+      if (win->next_exp_byte >= seq) {
           new_data_offset = win->next_exp_byte - seq;
           new_data_len -= new_data_offset;
+      } else {
+          // out-of-order packet
       }
 
       log_debugf("recv: new_data_len: %d, offset: %d\n", new_data_len, new_data_offset);
 
+      uint32_t ring_offset = MAX(seq, win->next_exp_byte) - (win->last_byte_read + 1);
+      char *new_data_start = pkt + DEFAULT_HEADER_LEN + new_data_offset;
       if (ringbuffer_free_space(win->recvq) >= new_data_len) {
-          ringbuffer_insert(win->recvq,
-            win->next_exp_byte - (win->last_byte_read + 1),
-            pkt + DEFAULT_HEADER_LEN + new_data_offset,
-            new_data_len);
+          ringbuffer_insert(win->recvq, ring_offset, new_data_start, new_data_len);
       }
 
       // only the seq starts within the next_exp_byte is considered continuous
@@ -238,7 +251,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
 
       // cumulative ack
       uint32_t reply_ack = win->next_exp_byte;
-      uint32_t win_size = ringbuffer_free_space(win->recvq);
+      uint32_t win_size = MAX_NETWORK_BUFFER - ((win->next_exp_byte - 1) - win->last_byte_read);
 
       log_debugf("recv: reply_ack: %d, win_size: %d\n", reply_ack, win_size);
 
@@ -249,21 +262,20 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       free(rsp);
 
       uint32_t pop_data_len = win->next_exp_byte - (win->last_byte_read + 1);
-      char *data = malloc(pop_data_len);
-      int ret = ringbuffer_pop(win->recvq, &data, pop_data_len);
-      log_debugf("recv: pop_len: %d, ret: %d\n", pop_data_len, ret);
-      assert(ret == 0);
-
-      win->last_byte_read += pop_data_len;
-
-      if(sock->received_buf == NULL){
-        sock->received_buf = data;
+      if (pop_data_len > 0) {
+          char *data = malloc(pop_data_len);
+          int ret = ringbuffer_pop(win->recvq, &data, pop_data_len);
+          log_debugf("recv: pop_len: %d, ret: %d\n", pop_data_len, ret);
+          assert(ret == 0);
+          win->last_byte_read += pop_data_len;
+          if(sock->received_buf == NULL){
+            sock->received_buf = data;
+          } else{
+            sock->received_buf = realloc(sock->received_buf, sock->received_len + pop_data_len);
+          }
+          memcpy(sock->received_buf + sock->received_len, data, pop_data_len);
+          sock->received_len += pop_data_len;
       }
-      else{
-        sock->received_buf = realloc(sock->received_buf, sock->received_len + pop_data_len);
-      }
-      memcpy(sock->received_buf + sock->received_len, data, pop_data_len);
-      sock->received_len += pop_data_len;
 
       break;
   }
@@ -345,14 +357,16 @@ void send_within_window(cmu_socket_t * sock) {
     int ret;
 
     send_window_t *win = &sock->send_window;
-
-    assert(win->last_byte_sent >= win->last_ack_received - 1);
-
     uint32_t adv_win = win->last_win_received + 1;
+
+    log_debugf("send: begin with adv_win: %d, cwnd: %d\n", adv_win, win->cwnd);
+
+    log_debugf("send: last_byte_sent: %d, last_ack: %d\n", win->last_byte_sent, win->last_ack_received-1);
+    assert((int)win->last_byte_sent >= (int)win->last_ack_received - 1);
+
 
     int len = ringbuffer_len(win->sendq);
 
-    log_debugf("send: begin with adv_win: %d, cwnd: %d\n", adv_win, win->cwnd);
     len = MIN(len, adv_win);
     len = MIN(len, win->cwnd);
 
@@ -431,7 +445,7 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
     uint32_t prev_ack = win->last_ack_received;
     while (win->last_ack_received <= last_byte_to_send) {
 
-        log_debugf("multi_send: last_ack: %d, last_byte: %d\n",
+        log_debugf("multi_send: last_ack: %d, last_byte_to_send: %d\n",
                 win->last_ack_received, last_byte_to_send);
 
         int send_len = MIN(ringbuffer_free_space(win->sendq), len);
