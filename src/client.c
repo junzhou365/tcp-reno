@@ -27,8 +27,8 @@ void functionality(cmu_socket_t  * sock){
     read = cmu_read(sock, buf, 200, NO_WAIT);
     printf("Read: %d\n", read);
 
-    fp = fopen("./test.data", "rb");
-    /*fp = fopen("./src/cmu_tcp.c", "rb");*/
+    /*fp = fopen("./test.data", "rb");*/
+    fp = fopen("./src/cmu_tcp.c", "rb");
     read = 1;
     while(read > 0 ){
         read = fread(buf, 1, 2000, fp);

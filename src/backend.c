@@ -146,7 +146,6 @@ void handle_message(cmu_socket_t * sock, char* pkt){
       if(get_ack(pkt) > sock->send_window.last_ack_received) {
 
         sock->send_window.last_ack_received = get_ack(pkt);
-        sock->send_window.duplicates = 0;
 
         struct timespec ack_time;
         assert(get_curusec(&ack_time) == 0);
@@ -164,38 +163,6 @@ void handle_message(cmu_socket_t * sock, char* pkt){
             get_timeout(sock->send_window.est_rtt, sock->send_window.deviation);
         log_debugf("new timeout: %d\n", sock->send_window.timeout);
 
-        switch (swin->cong_state) {
-            case CONG_SLOW_START:
-                swin->cwnd += MAX_LEN;
-                if (swin->cwnd >= swin->ssthresh)
-                    swin->cong_state = CONG_AVOID;
-                break;
-
-            case CONG_AVOID:
-                swin->cwnd += MAX_LEN * (MAX_LEN / swin->cwnd);
-                break;
-
-            /*case CONG_RECOV:*/
-                /*swin.cwnd += MAX_LEN;*/
-                /*break*/
-        }
-      } else {
-          sock->send_window.duplicates++;
-          /*switch (swin.cong_state) {*/
-              /*case CONG_SLOW_START:*/
-                  /*swin.cwnd += MAX_LEN;*/
-                  /*if (swin.cwnd >= swin.ssthresh)*/
-                      /*swin.cong_state = CONG_AVOID;*/
-                  /*break*/
-
-              /*case CONG_AVOID:*/
-                  /*swin.cwnd += MAX_LEN * (MAX_LEN / swin.cwnd);*/
-                  /*break*/
-
-              /*case CONG_RECOV:*/
-                  /*swin.cwnd += MAX_LEN;*/
-                  /*break*/
-          /*}*/
       }
 
       swin->last_win_received = get_advertised_window(pkt);
@@ -468,6 +435,9 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
         assert(get_curusec(&start) == 0);
         log_debugf("multi_send: prev timeout: %d, start: %d\n", prev_timeout, start);
 
+        int duplicates = 0;
+        uint32_t last_ack = win->last_ack_received;
+
         // since the check_for_data checks a packet per call, we have to 
         // add the extra timeout
         while (TRUE) {
@@ -479,17 +449,65 @@ void multi_send(cmu_socket_t * sock, char *data, int len) {
             long diff = diff_ts_usec(&now, &start);
             log_debugf("multi_send: diff: %d, now: %d, start: %d\n", diff, now, start);
             assert(diff > 0);
-            if (diff >= prev_timeout || sock->send_window.duplicates >= 3) {
-                sock->send_window.duplicates = 0;
-                break;
+
+            int is_timeout = FALSE;
+            if (diff >= prev_timeout)
+                is_timeout = TRUE;
+
+            switch (win->cong_state) {
+                case CONG_SLOW_START:
+                    if (is_timeout) {
+                        win->ssthresh = win->cwnd;
+                        win->cwnd = MAX_DLEN;
+                        duplicates = 0;
+                    } else {
+                        if (last_ack >= win->last_ack_received) {
+                            duplicates++;
+                        } else {
+                            win->cwnd += MAX_DLEN;
+                            if (win->cwnd >= win->ssthresh)
+                                win->cong_state = CONG_AVOID;
+
+                            duplicates = 0;
+                        }
+                    }
+
+                    break;
+
+                case CONG_AVOID:
+                    if (is_timeout) {
+                        win->ssthresh = win->cwnd / 2;
+                        win->cwnd = MAX_DLEN;
+                        duplicates = 0;
+                    } else {
+                        if (last_ack >= win->last_ack_received) {
+                            duplicates++;
+                        } else {
+                            win->cwnd += MAX_DLEN * (MAX_DLEN / win->cwnd);
+                            duplicates = 0;
+                        }
+                    }
+                    break;
+
+                /*case CONG_RECOV:*/
+                    /*swin.cwnd += MAX_LEN;*/
+                    /*break*/
             }
 
+
+            last_ack = win->last_ack_received;
+
+            if (is_timeout || duplicates == 3)
+                break;
+
+            // done
             if (win->last_ack_received > last_byte_to_send)
                 break;
         }
 
         ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - prev_ack);
         assert(ret == 0);
+
         prev_ack = win->last_ack_received;
 
         /*last_byte_to_send = win->last_ack_received + len - 1;*/
@@ -608,11 +626,13 @@ int close_conn(cmu_socket_t *dst) {
 
     // LAST_ACK
     if (remote_closed) {
-        send_empty_pkt(dst, FIN_FLAG_MASK, seq, 0);
-        check_for_data(dst, TIMEOUT);
-        if (check_ack(dst, seq))
-            return EXIT_SUCCESS;
+        for (int i = 0; i < 20; i++) {
+            send_empty_pkt(dst, FIN_FLAG_MASK, seq, 0);
+            check_for_data(dst, TIMEOUT);
+            if (check_ack(dst, seq))
+                return EXIT_SUCCESS;
 
+        }
         // the connection is aborted
         return EXIT_FAILURE;
     }
@@ -636,8 +656,8 @@ int close_conn(cmu_socket_t *dst) {
             break;
     }
 
-    log_debugf("final stage, sleep 10 seconds\n");
+    log_debugf("final stage, sleep 2 seconds\n");
     // 120 is too long in the test
-    sleep(10);
+    sleep(2);
     return EXIT_SUCCESS;
 }
