@@ -1,8 +1,8 @@
 #ifndef _WINDOW_H_
 #define _WINDOW_H_
 
-#include <time.h>
 #include "ringbuffer.h"
+#include "timer.h"
 
 #define CONG_SLOW_START     0
 #define CONG_AVOID          1
@@ -21,11 +21,8 @@ typedef struct {
     int cwnd;
     int ssthresh;
     int cong_state;
+    tcp_timer_t *timer;
 
-    struct timespec send_time;
-    long est_rtt; // the RTT in micro seconds, scaled
-    long deviation; // in micro seconds, scaled
-    long timeout; // in micro seconds
 } send_window_t;
 
 typedef struct {

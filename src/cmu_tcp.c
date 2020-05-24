@@ -41,13 +41,9 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
   dst->send_window.last_win_received = MAX_NETWORK_BUFFER;
   dst->send_window.last_byte_sent = 0;
   dst->send_window.sendq = new_ringbuffer(MAX_NETWORK_BUFFER);
-  dst->send_window.duplicates = 0;
-  dst->send_window.send_time.tv_sec = 0;
-  dst->send_window.send_time.tv_nsec = 0;
-  dst->send_window.deviation = 0;
-  dst->send_window.est_rtt = WINDOW_INITIAL_RTT * 1000;
-  dst->send_window.deviation = 0;
-  dst->send_window.timeout = WINDOW_INITIAL_RTT * 1000;
+
+  dst->send_window.timer = new_tcp_timer(WINDOW_INITIAL_RTT, 16);
+
   pthread_mutex_init(&(dst->send_window.ack_lock), NULL);
   dst->send_window.cwnd = WINDOW_INITIAL_WINDOW_SIZE * (1 << 10);
   dst->send_window.ssthresh = WINDOW_INITIAL_SSTHRESH * (1 << 10);
@@ -152,6 +148,7 @@ int cmu_close(cmu_socket_t * sock){
 
   ringbuffer_free(sock->send_window.sendq);
   ringbuffer_free(sock->recv_window.recvq);
+  tcp_timer_free(sock->send_window.timer);
   return close(sock->socket);
 }
 

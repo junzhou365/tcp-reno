@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include "ringbuffer.h"
 
 ringbuffer *new_ringbuffer(int cap) {
@@ -78,21 +79,23 @@ int ringbuffer_move_end(ringbuffer *rb, int len) {
     return 0;
 }
 
-int ringbuffer_peek_from_start(
-        ringbuffer *rb, int len, char **data_out, int *len_out) {
-    if (len > rb->len)
-        return ERR_RINGBUFFER_NO_ENOUGH_SPACE;
-    
-    int peek_len = len;
-    if (peek_len > rb->len)
-        peek_len = rb->len;
+int ringbuffer_peek_from_start_offset(
+        ringbuffer *rb, int len, int offset, char **data_out, int *len_out) {
 
-    int start = rb->start;
-    for (int i = 0; i < peek_len; i++) {
+    int peek_len = 0;
+    int rlen = rb->len - offset;
+    int start = (rb->start + offset) % rb->cap;
+    for (int i = 0; i < len && i < rlen; i++) {
         *(*data_out + i) = rb->data[start];
+        peek_len++;
         start = (start + 1) % rb->cap;
     }
 
     *len_out = peek_len;
     return 0;
+}
+
+int ringbuffer_peek_from_start(
+        ringbuffer *rb, int len, char **data_out, int *len_out) {
+    return ringbuffer_peek_from_start_offset(rb, len, 0, data_out, len_out);
 }

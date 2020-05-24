@@ -23,6 +23,7 @@ int ringbuffer_pop(ringbuffer *rb, char **data_out, int len);
 int ringbuffer_insert(ringbuffer *rb, int offset, char *data, int len);
 int ringbuffer_move_end(ringbuffer *rb, int len);
 int ringbuffer_peek_from_start(ringbuffer *rb, int len, char **data_out, int *len_out);
+int ringbuffer_peek_from_start_offset(ringbuffer *rb, int len, int offset, char **data_out, int *len_out);
 
 #define ERR_RINGBUFFER_FULL 1
 #define ERR_RINGBUFFER_EMPTY 2

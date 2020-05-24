@@ -20,10 +20,15 @@ void functionality(cmu_socket_t  * sock){
     cmu_write(sock, "hi there", 9);
 
     sleep(5);
-    n = cmu_read(sock, buf, 9898, NO_FLAG);
-    printf("N: %d\n", n);
     fp = fopen("./test/file.c", "w+");
-    fwrite(buf, 1, n, fp);
+    while (TRUE) {
+        n = cmu_read(sock, buf, 9898, NO_FLAG);
+        if (!n)
+            break;
+
+        printf("N: %d\n", n);
+        fwrite(buf, 1, n, fp);
+    }
 }
 
 
