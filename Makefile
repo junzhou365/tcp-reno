@@ -49,7 +49,8 @@ ringbuffer-test:
 
 timer-test:
 	$(CC) $(FLAGS) -c $(SRC_DIR)/timer.c -o $(BUILD_DIR)/timer.o
-	$(CC) $(FLAGS) $(SRC_DIR)/timer_test.c -o $(BUILD_DIR)/timer_test  $(BUILD_DIR)/timer.o
+	$(CC) $(FLAGS) -c $(SRC_DIR)/log.c -o $(BUILD_DIR)/log.o
+	$(CC) $(FLAGS) $(SRC_DIR)/timer_test.c -o $(BUILD_DIR)/timer_test  $(BUILD_DIR)/timer.o $(BUILD_DIR)/log.o
 	$(BUILD_DIR)/timer_test
 
 backend-test: $(OBJS)

@@ -99,6 +99,35 @@ void timer_start_track(tcp_timer_t *timer, uint32_t seq, int len) {
     pthread_mutex_unlock(&(timer->lock));
 }
 
+void timer_discard(tcp_timer_t *timer, uint32_t seq) {
+    if (timer->len == 0)
+        return;
+
+    while(pthread_mutex_lock(&(timer->lock)) != 0);
+
+    int i = timer->start;
+    while (i < timer->end && seq >= timer->ts_queue[i]->seq) {
+        i++;
+        timer->len--;
+    }
+    timer->start = i;
+
+    if (timer->len == (timer->cap / 2)) {
+        for (int i = 0; i < timer->len; i++) {
+            timer->ts_queue[i] = timer->ts_queue[i+timer->start];
+        }
+        timer->start = 0;
+        timer->end = timer->len;
+
+        if (timer->cap / 2 > 0) {
+            timer->ts_queue = realloc(timer->ts_queue, (timer->cap / 2) * sizeof(ts_pair*));
+            timer->cap /= 2;
+        }
+    }
+
+    pthread_mutex_unlock(&(timer->lock));
+}
+
 int timer_end_track(tcp_timer_t *timer, uint32_t ack) {
     if (timer->len == 0)
         return -1;

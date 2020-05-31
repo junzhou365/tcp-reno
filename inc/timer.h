@@ -33,6 +33,8 @@ void tcp_timer_free(tcp_timer_t *timer);
 void timer_start_track(tcp_timer_t *timer, uint32_t seq, int len);
 int timer_end_track(tcp_timer_t *timer, uint32_t ack);
 long timer_get_timeout(tcp_timer_t *timer);
+// discard any packets that were resent
+void timer_discard(tcp_timer_t *timer, uint32_t seq);
 
 int get_curusec(struct timespec *ts);
 long diff_ts_usec(const struct timespec *now, const struct timespec *since);
