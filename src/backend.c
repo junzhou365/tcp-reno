@@ -389,13 +389,8 @@ int transmit_data(cmu_socket_t *sock, uint32_t new_first_byte, int max_len) {
     return buf_len;
 }
 
-void retransmit(cmu_socket_t *sock, int single) {
-    int max_len = 0;
-    if (single) {
-        max_len = MAX_DLEN;
-    }
-
-    transmit_data(sock, sock->send_window.last_ack_received, max_len);
+void retransmit(cmu_socket_t *sock) {
+    transmit_data(sock, sock->send_window.last_ack_received, MAX_DLEN);
 }
 
 void transmit(cmu_socket_t *sock) {
@@ -466,7 +461,7 @@ void multi_send(cmu_socket_t *sock) {
                     win->cwnd = MAX_DLEN;
                     win->next_byte_to_send = win->last_ack_received;
                     duplicates = 0;
-                    retransmit(sock, TRUE);
+                    retransmit(sock);
 
                 } else {
                     if (last_ack >= win->last_ack_received) {
@@ -487,7 +482,7 @@ void multi_send(cmu_socket_t *sock) {
                         win->cwnd = win->ssthresh + 3 * MAX_DLEN;
                         duplicates = 0;
                         win->cong_state = CONG_RECOV;
-                        retransmit(sock, TRUE);
+                        retransmit(sock);
                     }
                 }
 
@@ -500,7 +495,7 @@ void multi_send(cmu_socket_t *sock) {
                     duplicates = 0;
                     win->cong_state = CONG_SLOW_START;
                     win->next_byte_to_send = win->last_ack_received;
-                    retransmit(sock, TRUE);
+                    retransmit(sock);
                 } else {
                     if (last_ack >= win->last_ack_received) {
                         if (last_ack == win->last_ack_received)
@@ -515,7 +510,7 @@ void multi_send(cmu_socket_t *sock) {
                         win->ssthresh = MAX(win->cwnd / 2, 3 * MAX_DLEN);
                         win->cwnd = win->ssthresh + 3 * MAX_DLEN;
                         win->cong_state = CONG_RECOV;
-                        retransmit(sock, TRUE);
+                        retransmit(sock);
                     }
                 }
 
@@ -528,7 +523,7 @@ void multi_send(cmu_socket_t *sock) {
                     duplicates = 0;
                     win->cong_state = CONG_SLOW_START;
                     win->next_byte_to_send = win->last_ack_received;
-                    retransmit(sock, TRUE);
+                    retransmit(sock);
                 } else {
                     if (last_ack >= win->last_ack_received) {
                         if (last_ack == win->last_ack_received) {
