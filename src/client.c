@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include "cmu_tcp.h"
 
 /*
@@ -27,8 +28,19 @@ void functionality(cmu_socket_t  * sock){
     read = cmu_read(sock, buf, 200, NO_WAIT);
     printf("Read: %d\n", read);
 
-    /*fp = fopen("./test.data", "rb");*/
-    fp = fopen("./src/backend.c", "rb");
+    /*const char *file = "./src/backend.c";*/
+    const char *file = "./test.data";
+
+    struct stat st;
+    stat(file, &st);
+    int filesize = (int)st.st_size;
+    printf("source len: %d\n", filesize);
+
+    sprintf(buf, "%d", filesize);
+
+    cmu_write(sock, buf, 200);
+
+    fp = fopen(file, "rb");
     read = 1;
     while(read > 0 ){
         read = fread(buf, 1, 2000, fp);

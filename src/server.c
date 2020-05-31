@@ -20,15 +20,22 @@ void functionality(cmu_socket_t  * sock){
     cmu_write(sock, "hi there", 9);
 
     sleep(5);
-    fp = fopen("./test/file.c", "w+");
-    /*while (TRUE) {*/
-        n = cmu_read(sock, buf, 1<<20, NO_FLAG);
-        /*if (!n)*/
-            /*break;*/
+    n = cmu_read(sock, buf, 200, NO_FLAG);
+    int size = atoi(buf);
+    printf("file size: %d, N: %d\n", size, n);
+
+    const char *file = "./test/file.c";
+
+    fp = fopen(file, "w+");
+
+    int m = 0;
+    while (m < size) {
+        n = cmu_read(sock, buf, 20000, NO_FLAG);
+        m += n;
 
         printf("N: %d\n", n);
         fwrite(buf, 1, n, fp);
-    /*}*/
+    }
 }
 
 

@@ -67,7 +67,7 @@ void update_rtts(int sample_rtt, long *est_rtt, long *deviation) {
     /*log_debugf("after sample_rtt: %d, est_rtt: %d, dev: %d\n", sample_rtt, *est_rtt, *deviation);*/
 }
 
-void timer_start_track(tcp_timer_t *timer, int seq, int len) {
+void timer_start_track(tcp_timer_t *timer, uint32_t seq, int len) {
     while(pthread_mutex_lock(&(timer->lock)) != 0);
 
     if (timer->largest_seq >= seq) {
@@ -99,7 +99,7 @@ void timer_start_track(tcp_timer_t *timer, int seq, int len) {
     pthread_mutex_unlock(&(timer->lock));
 }
 
-int timer_end_track(tcp_timer_t *timer, int ack) {
+int timer_end_track(tcp_timer_t *timer, uint32_t ack) {
     if (timer->len == 0)
         return -1;
 

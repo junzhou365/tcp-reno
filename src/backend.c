@@ -270,7 +270,6 @@ void check_for_data(cmu_socket_t * sock, int flags){
 
 /*
  * send_data sends data in the buffer
- * it updates the last_byte_sent
  * also starts tot track the time of the packets
  */
 void send_data_in_buffer(
@@ -288,7 +287,6 @@ void send_data_in_buffer(
     int send_len = buffer_len(buf);
     char* data_offset = buffer_data(buf);
     uint32_t seq = new_first_byte;
-    win->next_byte_to_send += send_len;
 
     while(send_len > 0){
         char* msg;
@@ -314,7 +312,13 @@ void send_data_in_buffer(
 
         seq += plen - DEFAULT_HEADER_LEN;
     }
+}
 
+void assert_with(int x, int a, int b) {
+    if (!x) {
+        printf("a: %d, b: %d\n", a, b);
+        assert(x);
+    }
 }
 
 /*
@@ -322,40 +326,50 @@ void send_data_in_buffer(
  */
 
 void get_send_buf(
-    send_window_t *win, uint32_t first_byte, int max_len, buffer *buf_in_out) {
+    send_window_t *send_win, uint32_t first_byte, buffer *buf_in_out) {
 
     // TODO: fix last_win_received + 1
-    uint32_t adv_win = win->last_win_received;
+    uint32_t adv_win = send_win->last_win_received;
 
-    int len = buffer_len(win->sendq);
+    int buf_len = buffer_len(send_win->sendq);
+    int win = buf_len;
 
-    len = MIN(len, adv_win);
-    len = MIN(len, win->cwnd);
-    if (max_len > 0)
-        len = MIN(len, max_len);
+    win = MIN(win, adv_win);
+    win = MIN(win, send_win->cwnd);
+    win -= send_win->next_byte_to_send - send_win->last_ack_received;
 
-    int offset = first_byte - win->sendq_base;
-    assert(offset >= 0);
-
-    if (offset >= len) {
-        buf_in_out->len = 0;
+    if (win <= 0) {
+        log_infof("get_send_buf: no window to send data\n");
         return;
     }
 
-    buffer_subrange_buffer(win->sendq, offset, offset + len, buf_in_out);
+    int offset = first_byte - send_win->sendq_base;
+    assert(offset >= 0);
+
+    if (offset >= buf_len) {
+        return;
+    }
+
+    buffer_subrange_buffer(send_win->sendq, offset, offset + win, buf_in_out);
+
+    assert_with(buffer_len(buf_in_out) < (20 << 20), offset, win);
 }
 
-void transmit_data(cmu_socket_t *sock, uint32_t new_first_byte) {
+int transmit_data(cmu_socket_t *sock, uint32_t new_first_byte) {
     send_window_t *win = &sock->send_window;
 
     buffer buf;
-    get_send_buf(win, new_first_byte, 0, &buf);
+    buf.len = 0;
+    get_send_buf(win, new_first_byte, &buf);
 
-    if (buffer_len(&buf) == 0) {
-        return;
+    int buf_len = buffer_len(&buf);
+
+    log_debugf("transmit_data: new_byte: %d, buf_len: %d\n",
+        new_first_byte, buf_len);
+
+    if (buf_len == 0) {
+        return 0;
     }
-
-    log_debugf("transmit_data: new_byte: %d, buf_len: %d\n", new_first_byte, buffer_len(&buf));
 
     send_data_in_buffer(
         win,
@@ -366,6 +380,8 @@ void transmit_data(cmu_socket_t *sock, uint32_t new_first_byte) {
         &sock->conn,
         new_first_byte,
         &buf);
+
+    return buf_len;
 }
 
 void retransmit(cmu_socket_t *sock) {
@@ -373,7 +389,9 @@ void retransmit(cmu_socket_t *sock) {
 }
 
 void transmit(cmu_socket_t *sock) {
-    transmit_data(sock, sock->send_window.next_byte_to_send);
+    log_debugf("transmit: new_byte: %d\n", sock->send_window.next_byte_to_send);
+    int n = transmit_data(sock, sock->send_window.next_byte_to_send);
+    sock->send_window.next_byte_to_send += n;
 }
 
 
@@ -387,6 +405,10 @@ void transmit(cmu_socket_t *sock) {
 void multi_send(cmu_socket_t *sock) {
 
     send_window_t *win = &sock->send_window;
+
+    log_debugf("multi_send: start for %d, len: %d\n",
+        win->sendq_base, buffer_len(win->sendq));
+
     int len = buffer_len(win->sendq);
     uint32_t last_byte_to_send = win->last_ack_received + len - 1;
 
@@ -396,7 +418,7 @@ void multi_send(cmu_socket_t *sock) {
 
     transmit(sock);
 
-    log_debugf("last_byte_to_send: %d\n", last_byte_to_send);
+    log_debugf("multi_send: last_byte_to_send: %d\n", last_byte_to_send);
 
     while (win->last_ack_received <= last_byte_to_send) {
         log_debugf("multi_send: last_ack_received: %d, last_byte_to_send: %d\n",
@@ -429,6 +451,7 @@ void multi_send(cmu_socket_t *sock) {
                 if (is_timeout) {
                     win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
                     win->cwnd = MAX_DLEN;
+                    win->next_byte_to_send = win->last_ack_received;
                     duplicates = 0;
                     retransmit(sock);
 
@@ -463,6 +486,7 @@ void multi_send(cmu_socket_t *sock) {
                     win->cwnd = MAX_DLEN;
                     duplicates = 0;
                     win->cong_state = CONG_SLOW_START;
+                    win->next_byte_to_send = win->last_ack_received;
                     retransmit(sock);
                 } else {
                     if (last_ack >= win->last_ack_received) {
@@ -491,6 +515,7 @@ void multi_send(cmu_socket_t *sock) {
                     win->cwnd = MAX_DLEN;
                     duplicates = 0;
                     win->cong_state = CONG_SLOW_START;
+                    win->next_byte_to_send = win->last_ack_received;
                     retransmit(sock);
                 } else {
                     if (last_ack >= win->last_ack_received) {
@@ -566,6 +591,7 @@ void* begin_backend(void * in){
       buffer_from_data(&buf, data, buf_len);
       dst->send_window.sendq = &buf;
       dst->send_window.sendq_base = dst->send_window.last_ack_received;
+      dst->send_window.next_byte_to_send = dst->send_window.last_ack_received;
       multi_send(dst);
       free(data);
     }

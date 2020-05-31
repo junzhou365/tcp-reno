@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include "buffer.h"
@@ -20,6 +21,7 @@ int buffer_cap(buffer *b) {
 }
 
 int buffer_len(buffer *b) {
+    assert(b->len >= 0);
     return b->len;
 }
 
@@ -62,6 +64,7 @@ void buffer_subrange_buffer(buffer *b, int s, int e, buffer *buf_out) {
         e = b->len;
     }
 
+    assert(e >= s);
     buf_out->data = b->data + s;
     buf_out->len = e - s;
 
