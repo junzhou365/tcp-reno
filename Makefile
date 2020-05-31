@@ -10,6 +10,7 @@ OBJS = $(BUILD_DIR)/cmu_packet.o \
 	$(BUILD_DIR)/cmu_tcp.o \
 	$(BUILD_DIR)/backend.o \
 	$(BUILD_DIR)/ringbuffer.o \
+	$(BUILD_DIR)/buffer.o \
 	$(BUILD_DIR)/log.o \
 	$(BUILD_DIR)/timer.o
 
@@ -50,3 +51,7 @@ timer-test:
 	$(CC) $(FLAGS) -c $(SRC_DIR)/timer.c -o $(BUILD_DIR)/timer.o
 	$(CC) $(FLAGS) $(SRC_DIR)/timer_test.c -o $(BUILD_DIR)/timer_test  $(BUILD_DIR)/timer.o
 	$(BUILD_DIR)/timer_test
+
+backend-test: $(OBJS)
+	$(CC) $(FLAGS) $(SRC_DIR)/backend_test.c -o $(BUILD_DIR)/backend_test $(OBJS)
+	$(BUILD_DIR)/backend_test

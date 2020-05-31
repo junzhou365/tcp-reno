@@ -8,7 +8,7 @@
  *
  */
 void functionality(cmu_socket_t  * sock){
-    char buf[9898];
+    char buf[1<<20];
     FILE *fp;
     int n;
 
@@ -21,14 +21,14 @@ void functionality(cmu_socket_t  * sock){
 
     sleep(5);
     fp = fopen("./test/file.c", "w+");
-    while (TRUE) {
-        n = cmu_read(sock, buf, 9898, NO_FLAG);
-        if (!n)
-            break;
+    /*while (TRUE) {*/
+        n = cmu_read(sock, buf, 1<<20, NO_FLAG);
+        /*if (!n)*/
+            /*break;*/
 
         printf("N: %d\n", n);
         fwrite(buf, 1, n, fp);
-    }
+    /*}*/
 }
 
 

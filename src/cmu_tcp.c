@@ -1,24 +1,7 @@
 #include "cmu_tcp.h"
 
-/*
- * Param: dst - The structure where socket information will be stored
- * Param: flag - A flag indicating the type of socket(Listener / Initiator)
- * Param: port - The port to either connect to, or bind to. (Based on flag)
- * Param: ServerIP - The server IP to connect to if the socket is an initiator.
- *
- * Purpose: To construct a socket that will be used in various connections.
- *  The initiator socket can be used to connect to a listener socket.
- *
- * Return: The newly created socket will be stored in the dst parameter,
- *  and the value returned will provide error information. 
- *
- */
-int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
-  int sockfd, optval;
-  socklen_t len;
-  struct sockaddr_in conn, my_addr;
-  len = sizeof(my_addr);
-
+int init_cmu_socket(cmu_socket_t * dst, int flag, int port) {
+  int sockfd;
   sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0){
     perror("ERROR opening socket");
@@ -39,8 +22,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
 
   dst->send_window.last_ack_received = 0;
   dst->send_window.last_win_received = MAX_NETWORK_BUFFER;
-  dst->send_window.last_byte_sent = 0;
-  dst->send_window.sendq = new_ringbuffer(MAX_NETWORK_BUFFER);
+  dst->send_window.next_byte_to_send = 0;
 
   dst->send_window.timer = new_tcp_timer(WINDOW_INITIAL_RTT, 16);
 
@@ -58,6 +40,38 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     perror("ERROR condition variable not set\n");
     return EXIT_ERROR;
   }
+
+  dst->sendto_func = sendto;
+
+  return 0;
+}
+
+
+/*
+ * Param: dst - The structure where socket information will be stored
+ * Param: flag - A flag indicating the type of socket(Listener / Initiator)
+ * Param: port - The port to either connect to, or bind to. (Based on flag)
+ * Param: ServerIP - The server IP to connect to if the socket is an initiator.
+ *
+ * Purpose: To construct a socket that will be used in various connections.
+ *  The initiator socket can be used to connect to a listener socket.
+ *
+ * Return: The newly created socket will be stored in the dst parameter,
+ *  and the value returned will provide error information. 
+ *
+ */
+int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
+
+  int ret = init_cmu_socket(dst, flag, port);
+  if (ret != 0) {
+    return ret;
+  }
+
+  int sockfd, optval;
+  sockfd = dst->socket;
+  socklen_t len;
+  struct sockaddr_in conn, my_addr;
+  len = sizeof(my_addr);
 
 
   switch(flag){
@@ -146,7 +160,6 @@ int cmu_close(cmu_socket_t * sock){
     return EXIT_ERROR;
   }
 
-  ringbuffer_free(sock->send_window.sendq);
   ringbuffer_free(sock->recv_window.recvq);
   tcp_timer_free(sock->send_window.timer);
   return close(sock->socket);

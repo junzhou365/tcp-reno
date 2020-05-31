@@ -66,6 +66,7 @@ void handle_message(cmu_socket_t * sock, char* pkt){
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(sock->conn), conn_len);
         free(rsp);
+        sock->send_window.next_byte_to_send++;
 
         win->next_exp_byte += 1;
         win->last_byte_read += 1;
@@ -74,12 +75,12 @@ void handle_message(cmu_socket_t * sock, char* pkt){
     case SYN_FLAG_MASK | ACK_FLAG_MASK:
         sock->send_window.last_ack_received = get_ack(pkt);
         seq = get_seq(pkt);
-        sock->send_window.last_ack_received = get_ack(pkt);
         rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), 0 /*seq*/, seq + 1 /*ack*/,
           DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK,
           ringbuffer_free_space(win->recvq) - 1, 0, NULL, NULL, 0);
         sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(sock->conn), conn_len);
+
         free(rsp);
 
         win->next_exp_byte += 1;
@@ -267,85 +268,114 @@ void check_for_data(cmu_socket_t * sock, int flags){
   pthread_mutex_unlock(&(sock->recv_lock));
 }
 
+/*
+ * send_data sends data in the buffer
+ * it updates the last_byte_sent
+ * also starts tot track the time of the packets
+ */
+void send_data_in_buffer(
+	send_window_t *win,
+	uint16_t my_port,
+	uint16_t their_port,
+    ssize_t sendto_func (int, const void *, size_t, int, const struct sockaddr *, socklen_t),
+	int socket,
+	struct sockaddr_in *conn,
+    uint32_t new_first_byte,
+    buffer *buf
+) {
 
-// the actual sent is indicated by last_byte_sent
-int send_within_window(uint32_t first_byte_offset, int max_len, cmu_socket_t * sock) {
+    int plen;
+    int send_len = buffer_len(buf);
+    char* data_offset = buffer_data(buf);
+    uint32_t seq = new_first_byte;
+    win->next_byte_to_send += send_len;
 
-    int ret;
+    while(send_len > 0){
+        char* msg;
+        if (send_len <= MAX_DLEN) {
+          plen = DEFAULT_HEADER_LEN + send_len;
+          msg = create_packet_buf(my_port, their_port, seq, seq,
+            DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, send_len);
+        }
+        else {
+          plen = DEFAULT_HEADER_LEN + MAX_DLEN;
+          msg = create_packet_buf(my_port, their_port, seq, seq,
+            DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
+        }
 
-    send_window_t *win = &sock->send_window;
-    uint32_t adv_win = win->last_win_received + 1;
+        log_debugf("send: send: seq: %d, len: %d\n", seq, plen - DEFAULT_HEADER_LEN);
+        sendto_func(socket, msg, plen, 0, (struct sockaddr*) conn, sizeof(*conn));
 
-    log_debugf("send: begin with adv_win: %d, cwnd: %d\n", adv_win, win->cwnd);
+        timer_start_track(win->timer, seq, plen - DEFAULT_HEADER_LEN);
 
-    log_debugf("send: last_byte_sent: %d, last_ack: %d\n", win->last_byte_sent, win->last_ack_received-1);
-    assert((int)win->last_byte_sent >= (int)win->last_ack_received - 1);
+        data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
 
+        send_len -= plen - DEFAULT_HEADER_LEN;
 
-    int len = ringbuffer_len(win->sendq);
+        seq += plen - DEFAULT_HEADER_LEN;
+    }
+
+}
+
+/*
+ * get_send_buf calculates
+ */
+
+void get_send_buf(
+    send_window_t *win, uint32_t first_byte, int max_len, buffer *buf_in_out) {
+
+    // TODO: fix last_win_received + 1
+    uint32_t adv_win = win->last_win_received;
+
+    int len = buffer_len(win->sendq);
 
     len = MIN(len, adv_win);
     len = MIN(len, win->cwnd);
     if (max_len > 0)
         len = MIN(len, max_len);
 
-    char *send_buf = malloc(len);
+    int offset = first_byte - win->sendq_base;
+    assert(offset >= 0);
 
-    /*log_debugf("send: peek_len: %d\n", len);*/
-
-    int send_len = 0;
-    int offset = first_byte_offset - win->last_ack_received;
-    ret = ringbuffer_peek_from_start_offset(win->sendq, len, offset, &send_buf, &send_len);
-    assert(ret == 0);
-
-    log_debugf("send: send_len: %d, offset: %d\n", send_len, offset);
-
-    char* data_offset = send_buf;
-    int sockfd, plen;
-    size_t conn_len = sizeof(sock->conn);
-
-    uint32_t seq = win->last_ack_received;
-
-    if (send_len == 0)
-        return 0;
-
-    len = send_len;
-
-    /*log_debugf("send: new time %d\n", sock->send_window.send_time);*/
-
-    sockfd = sock->socket;
-    while(send_len > 0){
-
-      char* msg;
-      if (send_len <= MAX_DLEN) {
-        plen = DEFAULT_HEADER_LEN + send_len;
-        msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq,
-          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, send_len);
-      }
-      else {
-        plen = DEFAULT_HEADER_LEN + MAX_DLEN;
-        msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq,
-          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, MAX_DLEN);
-      }
-
-      log_debugf("send: send: %d\n", plen - DEFAULT_HEADER_LEN);
-      sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
-
-      timer_start_track(win->timer, seq, plen - DEFAULT_HEADER_LEN);
-
-      data_offset = data_offset + plen - DEFAULT_HEADER_LEN;
-
-      send_len -= plen - DEFAULT_HEADER_LEN;
-
-      seq += plen - DEFAULT_HEADER_LEN;
-      win->last_byte_sent = MAX(seq - 1, win->last_byte_sent);
+    if (offset >= len) {
+        buf_in_out->len = 0;
+        return;
     }
 
-    free(send_buf);
-
-    log_debugf("send: send_within_window done\n");
-    return len;
+    buffer_subrange_buffer(win->sendq, offset, offset + len, buf_in_out);
 }
+
+void transmit_data(cmu_socket_t *sock, uint32_t new_first_byte) {
+    send_window_t *win = &sock->send_window;
+
+    buffer buf;
+    get_send_buf(win, new_first_byte, 0, &buf);
+
+    if (buffer_len(&buf) == 0) {
+        return;
+    }
+
+    log_debugf("transmit_data: new_byte: %d, buf_len: %d\n", new_first_byte, buffer_len(&buf));
+
+    send_data_in_buffer(
+        win,
+        sock->my_port,
+        sock->their_port,
+        sock->sendto_func,
+        sock->socket,
+        &sock->conn,
+        new_first_byte,
+        &buf);
+}
+
+void retransmit(cmu_socket_t *sock) {
+    transmit_data(sock, sock->send_window.last_ack_received);
+}
+
+void transmit(cmu_socket_t *sock) {
+    transmit_data(sock, sock->send_window.next_byte_to_send);
+}
+
 
 /*
  * Param: sock - The socket to use for sending data
@@ -354,203 +384,147 @@ int send_within_window(uint32_t first_byte_offset, int max_len, cmu_socket_t * s
  * Comment: This will need to be updated for checkpoints 1,2,3
  *
  */
-void multi_send(cmu_socket_t * sock, char *data, int len) {
+void multi_send(cmu_socket_t *sock) {
 
     send_window_t *win = &sock->send_window;
+    int len = buffer_len(win->sendq);
     uint32_t last_byte_to_send = win->last_ack_received + len - 1;
 
-    int ret;
-    int orig_len = len;
-
-    log_debugf("multi_send: orig_len:%d\n", orig_len);
-    char *data_offset = data;
     int duplicates = 0;
-
-    uint32_t prev_ack = win->last_ack_received;
-    uint32_t this_round_start_byte = win->last_ack_received;
-
-    int to_retransmit = FALSE;
     struct timespec start;
+    uint32_t last_ack = win->last_ack_received;
+
+    transmit(sock);
+
+    log_debugf("last_byte_to_send: %d\n", last_byte_to_send);
 
     while (win->last_ack_received <= last_byte_to_send) {
-
-        log_debugf("multi_send: last_ack: %d, last_byte_to_send: %d\n",
+        log_debugf("multi_send: last_ack_received: %d, last_byte_to_send: %d\n",
                 win->last_ack_received, last_byte_to_send);
-
-        if (!to_retransmit) {
-            int send_len = MIN(ringbuffer_free_space(win->sendq), len);
-            ret = ringbuffer_push(win->sendq, data_offset, send_len);
-            assert(ret == 0);
-            len -= send_len;
-        }
-
-        int actual_sent_size = send_within_window(this_round_start_byte, 0, sock);
-
-        log_debugf("multi_send: this_round_start_byte: %d, actual_send_len: %d\n",
-                this_round_start_byte, actual_sent_size);
 
         // the windowed data should be acked in time
         long prev_timeout = timer_get_timeout(sock->send_window.timer);
-        log_debugf("multi_send: prev timeout: %d, start: %d\n", prev_timeout, start);
+        /*log_debugf("multi_send: prev timeout: %d, start: %d\n", prev_timeout, start);*/
 
         assert(get_curusec(&start) == 0);
 
-        to_retransmit = FALSE;
-        int retransmit_single = FALSE;
+        check_for_data(sock, TIMEOUT);
+        struct timespec now;
+        now.tv_sec = 0;
+        now.tv_nsec = 0;
+        assert(get_curusec(&now) == 0);
+        long diff = diff_ts_usec(&now, &start);
+        /*log_debugf("multi_send: diff: %d, now: %d, start: %d\n", diff, now, start);*/
+        assert(diff > 0);
 
-        uint32_t last_ack = win->last_ack_received;
+        int is_timeout = FALSE;
+        if (diff >= prev_timeout)
+            is_timeout = TRUE;
 
-        // since the check_for_data checks a packet per call, we have to 
-        // add the extra timeout
-        while (TRUE) {
-            check_for_data(sock, TIMEOUT);
-            struct timespec now;
-            now.tv_sec = 0;
-            now.tv_nsec = 0;
-            assert(get_curusec(&now) == 0);
-            long diff = diff_ts_usec(&now, &start);
-            /*log_debugf("multi_send: diff: %d, now: %d, start: %d\n", diff, now, start);*/
-            assert(diff > 0);
+        log_debugf("multi_send: cur state: %d, cwin: %d, dup: %d, timeout: %d\n",
+            win->cong_state, win->cwnd, duplicates, is_timeout);
 
-            int is_timeout = FALSE;
-            if (diff >= prev_timeout)
-                is_timeout = TRUE;
+        switch (win->cong_state) {
+            case CONG_SLOW_START:
+                if (is_timeout) {
+                    win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
+                    win->cwnd = MAX_DLEN;
+                    duplicates = 0;
+                    retransmit(sock);
 
-            log_debugf("multi_send: cur state: %d, cwin: %d, dup: %d, timeout: %d\n",
-                win->cong_state, win->cwnd, duplicates, is_timeout);
-
-            switch (win->cong_state) {
-                case CONG_SLOW_START:
-                    if (is_timeout) {
-                        win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
-                        win->cwnd = MAX_DLEN;
-                        duplicates = 0;
-                        to_retransmit = TRUE;
+                } else {
+                    if (last_ack >= win->last_ack_received) {
+                        if (last_ack == win->last_ack_received)
+                            duplicates++;
                     } else {
-                        if (last_ack >= win->last_ack_received) {
-                            if (last_ack == win->last_ack_received)
-                                duplicates++;
-                        } else {
-                            win->cwnd += MAX_DLEN;
-                            if (win->cwnd >= win->ssthresh)
-                                win->cong_state = CONG_AVOID;
+                        win->cwnd += MAX_DLEN;
 
-                            duplicates = 0;
-                        }
-
-                        if (duplicates >= 3) {
-                            win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
-                            win->cwnd = win->ssthresh + 3 * MAX_DLEN;
-                            duplicates = 0;
-                            win->cong_state = CONG_RECOV;
-                            retransmit_single = TRUE;
-                        }
-                    }
-
-                    break;
-
-                case CONG_AVOID:
-                    if (is_timeout) {
-                        win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
-                        win->cwnd = MAX_DLEN;
-                        duplicates = 0;
-                        win->cong_state = CONG_SLOW_START;
-                        to_retransmit = TRUE;
-                    } else {
-                        if (last_ack >= win->last_ack_received) {
-                            if (last_ack == win->last_ack_received)
-                                duplicates++;
-                        } else {
-                            win->cwnd += MAX_DLEN * MAX_DLEN / win->cwnd;
-                            duplicates = 0;
-                        }
-
-                        if (duplicates >= 3) {
-                            win->ssthresh = MAX(win->cwnd / 2, 3 * MAX_DLEN);
-                            win->cwnd = win->ssthresh + 3 * MAX_DLEN;
-                            duplicates = 0;
-                            win->cong_state = CONG_RECOV;
-                            retransmit_single = TRUE;
-                        }
-                    }
-
-                    break;
-
-                case CONG_RECOV:
-                    if (is_timeout) {
-                        win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
-                        win->cwnd = MAX_DLEN;
-                        duplicates = 0;
-                        win->cong_state = CONG_SLOW_START;
-                        to_retransmit = TRUE;
-                    } else {
-                        if (last_ack >= win->last_ack_received) {
-                            if (last_ack == win->last_ack_received) {
-                                duplicates++;
-                                win->cwnd += MAX_DLEN;
-                            }
-                        } else {
-                            win->cwnd = win->ssthresh;
-                            duplicates = 0;
+                        if (win->cwnd >= win->ssthresh)
                             win->cong_state = CONG_AVOID;
-                        }
+
+                        duplicates = 0;
+                        transmit(sock);
                     }
 
-                    break;
-            }
+                    if (duplicates >= 3) {
+                        win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
+                        win->cwnd = win->ssthresh + 3 * MAX_DLEN;
+                        duplicates = 0;
+                        win->cong_state = CONG_RECOV;
+                        retransmit(sock);
+                    }
+                }
 
-            log_infof("| { state: %d, cwnd: %d, ssthresh: %d, adv_win: %d } \n",
-                    win->cong_state, win->cwnd, win->ssthresh,
-                    win->last_win_received, is_timeout);
-            log_infof("| { is_timeout: %d, dup: %d } \n", is_timeout, duplicates);
-            log_infof("| { this_round: %d, last_ack_recv: %d, last_end: %d } \n",
-                    this_round_start_byte, win->last_ack_received, this_round_start_byte + actual_sent_size);
-
-
-            log_debugf("multi_send: after state transfer, state: %d, cwin: %d, dup: %d\n",
-                win->cong_state, win->cwnd, duplicates);
-
-
-            last_ack = win->last_ack_received;
-
-            log_debugf("multi_send: this_round_start_byte:%d, last_ack:%d, actual_sent_size: %d\n",
-                    this_round_start_byte, last_ack, actual_sent_size);
-
-            int is_done = win->last_ack_received >= this_round_start_byte + actual_sent_size;
-
-            if (retransmit_single) {
-                int single_len = MIN(
-                        MAX_DLEN, this_round_start_byte + actual_sent_size - last_ack);
-
-                log_debugf("multi_send: retransmit start:%d, len:%d\n",
-                        last_ack, single_len);
-                send_within_window(last_ack, single_len, sock);
-                retransmit_single = FALSE;
-            }
-
-            if (to_retransmit) {
-                this_round_start_byte = win->last_ack_received;
-                log_debugf("multi_send: timeout retransmit all %d!!\n", this_round_start_byte);
                 break;
-            }
 
-            if (is_done) {
-                this_round_start_byte += actual_sent_size;
-                ret = ringbuffer_pop(win->sendq, NULL, win->last_ack_received - prev_ack);
-                assert(ret == 0);
-                to_retransmit = FALSE;
+            case CONG_AVOID:
+                if (is_timeout) {
+                    win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
+                    win->cwnd = MAX_DLEN;
+                    duplicates = 0;
+                    win->cong_state = CONG_SLOW_START;
+                    retransmit(sock);
+                } else {
+                    if (last_ack >= win->last_ack_received) {
+                        if (last_ack == win->last_ack_received)
+                            duplicates++;
+                    } else {
+                        win->cwnd += MAX_DLEN * MAX_DLEN / win->cwnd;
+                        duplicates = 0;
+                        transmit(sock);
+                    }
+
+                    if (duplicates >= 3) {
+                        win->ssthresh = MAX(win->cwnd / 2, 3 * MAX_DLEN);
+                        win->cwnd = win->ssthresh + 3 * MAX_DLEN;
+                        duplicates = 0;
+                        win->cong_state = CONG_RECOV;
+                        retransmit(sock);
+                    }
+                }
+
                 break;
-            }
+
+            case CONG_RECOV:
+                if (is_timeout) {
+                    win->ssthresh = MAX(win->cwnd / 2, MAX_DLEN);
+                    win->cwnd = MAX_DLEN;
+                    duplicates = 0;
+                    win->cong_state = CONG_SLOW_START;
+                    retransmit(sock);
+                } else {
+                    if (last_ack >= win->last_ack_received) {
+                        if (last_ack == win->last_ack_received) {
+                            duplicates++;
+                            win->cwnd += MAX_DLEN;
+                            transmit(sock);
+                        }
+                    } else {
+                        win->cwnd = win->ssthresh;
+                        duplicates = 0;
+                        win->cong_state = CONG_AVOID;
+                    }
+                }
+
+                break;
         }
 
-        prev_ack = win->last_ack_received;
+        log_infof("| { state: %d, cwnd: %d, ssthresh: %d, adv_win: %d } \n",
+                win->cong_state, win->cwnd, win->ssthresh,
+                win->last_win_received, is_timeout);
+        log_infof("| { is_timeout: %d, dup: %d } \n", is_timeout, duplicates);
+        /*log_infof("| { this_round: %d, last_ack_recv: %d, last_end: %d } \n",*/
+                /*this_round_start_byte, win->last_ack_received, this_round_start_byte + actual_sent_size);*/
 
-        /*last_byte_to_send = win->last_ack_received + len - 1;*/
-        /*sock->send_window.last_byte_sent = last_ack - 1;*/
-        log_debugf("multi_send: last_ack_received update to %d\n", sock->send_window.last_ack_received);
+
+        log_debugf("multi_send: after state transfer, state: %d, cwin: %d, dup: %d\n",
+            win->cong_state, win->cwnd, duplicates);
+
+
+        last_ack = win->last_ack_received;
     }
 
-    log_debugf("multi_send: done for len %d\n", orig_len);
+    log_debugf("multi_send: done for len %d\n", len);
 }
 
 /*
@@ -580,6 +554,8 @@ void* begin_backend(void * in){
     }
 
     if(buf_len > 0){
+      buffer buf;
+
       data = malloc(buf_len);
       memcpy(data, dst->sending_buf, buf_len);
       dst->sending_len = 0;
@@ -587,7 +563,10 @@ void* begin_backend(void * in){
       dst->sending_buf = NULL;
       pthread_mutex_unlock(&(dst->send_lock));
 
-      multi_send(dst, data, buf_len);
+      buffer_from_data(&buf, data, buf_len);
+      dst->send_window.sendq = &buf;
+      dst->send_window.sendq_base = dst->send_window.last_ack_received;
+      multi_send(dst);
       free(data);
     }
     else
@@ -629,6 +608,7 @@ int establish_conn(cmu_socket_t *dst) {
     while (TRUE) {
         timer_start_track(sock->send_window.timer, 0, 0);
         send_empty_pkt(sock, SYN_FLAG_MASK, 0, 0);
+        sock->send_window.next_byte_to_send = 1;
         check_for_data(dst, TIMEOUT);
         if (check_ack(sock, 0))
             break;

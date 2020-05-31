@@ -39,6 +39,8 @@ typedef struct {
 	pthread_mutex_t death_lock;
 	send_window_t send_window;
 	recv_window_t recv_window;
+
+    ssize_t (*sendto_func) (int, const void *, size_t, int, const struct sockaddr *, socklen_t);
 } cmu_socket_t;
 
 #endif

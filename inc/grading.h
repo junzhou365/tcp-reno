@@ -25,6 +25,7 @@
 
 //Max TCP Buffer
 #define MAX_NETWORK_BUFFER 65536 // 2^16 bytes
+//#define MAX_NETWORK_BUFFER 10 // for test
 
 
 #endif

@@ -1,6 +1,7 @@
 #ifndef _WINDOW_H_
 #define _WINDOW_H_
 
+#include "buffer.h"
 #include "ringbuffer.h"
 #include "timer.h"
 
@@ -11,10 +12,11 @@
 typedef struct {
 	uint32_t last_ack_received;
 	uint32_t last_win_received;
-    uint32_t last_byte_sent;
+    uint32_t next_byte_to_send;
 	pthread_mutex_t ack_lock;
 
-    ringbuffer* sendq;
+    buffer* sendq;
+    uint32_t sendq_base;
 
     int duplicates;
 
